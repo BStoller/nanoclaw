@@ -269,6 +269,10 @@ async function maybeCompactSession(
 
   const currentTokens = getSessionTokenCount(sessionId) + (usageTokens || 0);
   if (currentTokens < threshold || activeCompactions.has(sessionId)) return;
+  
+  activeCompactions.add(sessionId);
+  await compactSession(containerInput, sessionId);
+  activeCompactions.delete(sessionId);
 }
 
 async function compactSession(
