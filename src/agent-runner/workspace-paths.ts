@@ -56,7 +56,7 @@ export function resolveWorkspacePath(
   if (allowProject && ctx.isMain) {
     allowedRoots.push(path.resolve(ctx.projectDir));
   }
-  if (allowGlobal && !ctx.isMain) {
+  if (allowGlobal) {
     allowedRoots.push(path.resolve(ctx.globalDir));
   }
 
