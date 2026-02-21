@@ -161,13 +161,15 @@ async function handleCommandMessages(
     } else if (command === 'status') {
       const sessionId =
         sessions[group.folder] || getOrCreateSessionId(group.folder);
+      const modelProvider = group.modelProvider || 'opencode-zen';
+      const modelName = group.modelName || 'kimi-k2.5';
       const messageCount = getSessionMessageCount(group.folder, sessionId);
       const tokenCount = getSessionTokenCount(group.folder, sessionId);
       const lastTimestamp =
         getSessionLastTimestamp(group.folder, sessionId) || 'none';
       await channel.sendMessage(
         chatJid,
-        `Status: group=${group.folder} session=${sessionId} messages=${messageCount} tokens=${tokenCount} last=${lastTimestamp}`,
+        `Status: group=${group.folder} session=${sessionId} model=${modelProvider}/${modelName} messages=${messageCount} tokens=${tokenCount} last=${lastTimestamp}`,
       );
     }
 
