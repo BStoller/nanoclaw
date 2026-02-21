@@ -13,7 +13,7 @@ export function createWebTools() {
   return {
     WebFetch: tool({
       description: 'Fetch the contents of a URL as text.',
-      parameters: z.object({
+      inputSchema: z.object({
         url: z.string().url().describe('URL to fetch'),
       }),
       execute: async (input: { url: string }) => {
@@ -23,7 +23,7 @@ export function createWebTools() {
     }),
     WebSearch: tool({
       description: 'Search the web and return top results.',
-      parameters: z.object({
+      inputSchema: z.object({
         query: z.string().describe('Search query'),
         limit: z.number().int().optional().describe('Max number of results'),
       }),

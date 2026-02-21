@@ -15,10 +15,14 @@ async function getClient(options: McpClientOptions): Promise<Client> {
   if (clientPromise) return clientPromise;
 
   clientPromise = (async () => {
+    const env = {
+      ...sanitizeEnv(process.env),
+      ...sanitizeEnv(options.env),
+    };
     const transport = new StdioClientTransport({
       command: 'node',
       args: [options.mcpServerPath],
-      env: { ...process.env, ...options.env },
+      env,
       cwd: path.dirname(options.mcpServerPath),
     });
     const client = new Client({
@@ -30,6 +34,18 @@ async function getClient(options: McpClientOptions): Promise<Client> {
   })();
 
   return clientPromise;
+}
+
+function sanitizeEnv(
+  env: Record<string, string | undefined>,
+): Record<string, string> {
+  const sanitized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === 'string') {
+      sanitized[key] = value;
+    }
+  }
+  return sanitized;
 }
 
 async function callMcpTool(
@@ -53,7 +69,7 @@ export function createMcpTools(options: McpClientOptions) {
   return {
     send_message: tool({
       description: 'Send a message to the user or group immediately.',
-      parameters: z.object({
+      inputSchema: z.object({
         text: z.string().describe('Message text'),
         sender: z.string().optional().describe('Optional sender identity'),
       }),
@@ -62,7 +78,7 @@ export function createMcpTools(options: McpClientOptions) {
     }),
     schedule_task: tool({
       description: 'Schedule a recurring or one-time task.',
-      parameters: z.object({
+      inputSchema: z.object({
         prompt: z.string().describe('Task prompt'),
         schedule_type: z
           .enum(['cron', 'interval', 'once'])
@@ -81,30 +97,30 @@ export function createMcpTools(options: McpClientOptions) {
     }),
     list_tasks: tool({
       description: 'List scheduled tasks.',
-      parameters: z.object({}).optional(),
+      inputSchema: z.object({}).optional(),
       execute: async () => callMcpTool(options, 'list_tasks', {}),
     }),
     pause_task: tool({
       description: 'Pause a scheduled task.',
-      parameters: z.object({ task_id: z.string().describe('Task ID') }),
+      inputSchema: z.object({ task_id: z.string().describe('Task ID') }),
       execute: async (input: { task_id: string }) =>
         callMcpTool(options, 'pause_task', input),
     }),
     resume_task: tool({
       description: 'Resume a scheduled task.',
-      parameters: z.object({ task_id: z.string().describe('Task ID') }),
+      inputSchema: z.object({ task_id: z.string().describe('Task ID') }),
       execute: async (input: { task_id: string }) =>
         callMcpTool(options, 'resume_task', input),
     }),
     cancel_task: tool({
       description: 'Cancel a scheduled task.',
-      parameters: z.object({ task_id: z.string().describe('Task ID') }),
+      inputSchema: z.object({ task_id: z.string().describe('Task ID') }),
       execute: async (input: { task_id: string }) =>
         callMcpTool(options, 'cancel_task', input),
     }),
     register_group: tool({
       description: 'Register a new WhatsApp group (main group only).',
-      parameters: z.object({
+      inputSchema: z.object({
         jid: z.string().describe('WhatsApp JID'),
         name: z.string().describe('Display name'),
         folder: z.string().describe('Folder name'),

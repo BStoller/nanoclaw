@@ -6,7 +6,13 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { streamText, type CoreMessage } from 'ai';
+import {
+  streamText,
+  stepCountIs,
+  type ModelMessage,
+  type ToolCallPart,
+  type ToolResultPart,
+} from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
@@ -206,7 +212,7 @@ async function runQuery(
   );
 
   const systemPrompt = buildSystemPrompt(containerInput.isMain);
-  const messages: CoreMessage[] = [];
+  const messages: ModelMessage[] = [];
   if (systemPrompt) {
     messages.push({ role: 'system', content: systemPrompt });
   }
@@ -222,7 +228,7 @@ async function runQuery(
     },
   }) as Record<string, any>;
 
-  let responseMessages: CoreMessage[] = [];
+  let responseMessages: ModelMessage[] = [];
   let usageTokens = 0;
   let responseText = '';
 
@@ -230,14 +236,11 @@ async function runQuery(
     model,
     messages,
     tools: tools as Record<string, any>,
-    maxTokens: config.maxOutputTokens,
-    maxSteps: 8,
-    onFinish: (result: {
-      response?: { messages?: CoreMessage[] };
-      usage?: { totalTokens?: number };
-    }) => {
-      responseMessages = result.response?.messages || [];
-      usageTokens = result.usage?.totalTokens ?? 0;
+    maxOutputTokens: config.maxOutputTokens,
+    stopWhen: stepCountIs(8),
+    onFinish: (event) => {
+      responseMessages = event.response?.messages ?? [];
+      usageTokens = event.totalUsage?.totalTokens ?? 0;
     },
   });
 
@@ -246,15 +249,13 @@ async function runQuery(
   }
 
   if (responseMessages.length === 0 && responseText) {
-    responseMessages = [
-      { role: 'assistant', content: responseText } as CoreMessage,
-    ];
+    responseMessages = [{ role: 'assistant', content: responseText }];
   }
 
   saveMessage(
     containerInput.groupFolder,
     sessionId,
-    { role: 'user', content: prompt } as CoreMessage,
+    { role: 'user', content: prompt },
     null,
   );
 
@@ -330,14 +331,14 @@ async function compactSession(
         },
         { role: 'user', content: summaryPrompt },
       ],
-      maxTokens: Math.min(2048, config.maxOutputTokens),
+      maxOutputTokens: Math.min(2048, config.maxOutputTokens),
     });
 
     for await (const chunk of summaryResult.textStream) {
       summaryText += chunk;
     }
 
-    const summaryMessage: CoreMessage = {
+    const summaryMessage: ModelMessage = {
       role: 'system',
       content: `Summary of earlier conversation:\n${summaryText.trim()}`,
     };
@@ -354,7 +355,7 @@ async function compactSession(
   }
 }
 
-function buildSummaryPrompt(messages: CoreMessage[]): string {
+function buildSummaryPrompt(messages: ModelMessage[]): string {
   const lines: string[] = [];
   for (const msg of messages) {
     const content = extractContentText(msg);
@@ -375,7 +376,7 @@ function buildSummaryPrompt(messages: CoreMessage[]): string {
 function archiveConversation(
   groupFolder: string,
   sessionId: string,
-  messages: CoreMessage[],
+  messages: ModelMessage[],
 ): void {
   try {
     const conversationsDir = '/workspace/group/conversations';
@@ -394,7 +395,7 @@ function archiveConversation(
   }
 }
 
-function formatTranscriptMarkdown(messages: CoreMessage[]): string {
+function formatTranscriptMarkdown(messages: ModelMessage[]): string {
   const now = new Date();
   const formatDateTime = (d: Date) =>
     d.toLocaleString('en-US', {
@@ -423,8 +424,8 @@ function formatTranscriptMarkdown(messages: CoreMessage[]): string {
             ? 'System'
             : 'Tool';
     const content = extractContentText(msg) || '';
-    const toolCalls = (msg as { toolCalls?: unknown }).toolCalls;
-    if (toolCalls) {
+    const toolCalls = extractToolCalls(msg);
+    if (toolCalls.length > 0) {
       lines.push(`**${label} (tool calls)**: ${JSON.stringify(toolCalls)}`);
     }
     if (content) {
@@ -436,16 +437,24 @@ function formatTranscriptMarkdown(messages: CoreMessage[]): string {
   return lines.join('\n');
 }
 
-function extractContentText(message: CoreMessage): string | null {
-  const content = (message as { content?: unknown }).content;
+function extractContentText(message: ModelMessage): string | null {
+  const content = message.content;
   if (typeof content === 'string') return content;
   if (!content) return null;
   if (Array.isArray(content)) {
     return content
       .map((part) => {
         if (typeof part === 'string') return part;
-        if (part && typeof part === 'object' && 'text' in part) {
-          return String((part as { text?: unknown }).text ?? '');
+        if (isTextPart(part)) {
+          return part.text ?? '';
+        }
+        if (isToolResultPart(part)) {
+          if (typeof part.output === 'string') return part.output;
+          try {
+            return JSON.stringify(part.output);
+          } catch {
+            return String(part.output ?? '');
+          }
         }
         return '';
       })
@@ -453,6 +462,44 @@ function extractContentText(message: CoreMessage): string | null {
       .trim();
   }
   return String(content);
+}
+
+function extractToolCalls(message: ModelMessage): Array<{
+  toolName: string;
+  toolCallId: string;
+  input: unknown;
+}> {
+  if (message.role !== 'assistant') return [];
+  if (!Array.isArray(message.content)) return [];
+  return message.content.filter(isToolCallPart).map((part) => ({
+    toolName: part.toolName,
+    toolCallId: part.toolCallId,
+    input: part.input,
+  }));
+}
+
+function isTextPart(part: unknown): part is { text: string | undefined } {
+  return !!part && typeof part === 'object' && 'text' in part;
+}
+
+function isToolCallPart(part: unknown): part is ToolCallPart {
+  return (
+    !!part &&
+    typeof part === 'object' &&
+    (part as { type?: unknown }).type === 'tool-call' &&
+    typeof (part as { toolName?: unknown }).toolName === 'string' &&
+    typeof (part as { toolCallId?: unknown }).toolCallId === 'string'
+  );
+}
+
+function isToolResultPart(part: unknown): part is ToolResultPart {
+  return (
+    !!part &&
+    typeof part === 'object' &&
+    (part as { type?: unknown }).type === 'tool-result' &&
+    typeof (part as { toolName?: unknown }).toolName === 'string' &&
+    typeof (part as { toolCallId?: unknown }).toolCallId === 'string'
+  );
 }
 
 async function main(): Promise<void> {

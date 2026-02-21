@@ -2,7 +2,8 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import type { CoreMessage } from 'ai';
+import type { JSONValue, ModelMessage, ToolCallPart, ToolResultPart } from 'ai';
+import type { ToolResultOutput } from '@ai-sdk/provider-utils';
 
 const STORE_DIR = path.join('/workspace/group', '.nanoclaw');
 const DB_PATH = path.join(STORE_DIR, 'conversation.db');
@@ -56,7 +57,7 @@ export function getOrCreateSessionId(groupFolder: string): string {
 export function loadMessages(
   groupFolder: string,
   sessionId: string,
-): CoreMessage[] {
+): ModelMessage[] {
   const database = getDb();
   const rows = database
     .prepare(
@@ -78,7 +79,7 @@ export function loadMessages(
 export function saveMessage(
   groupFolder: string,
   sessionId: string,
-  message: CoreMessage,
+  message: ModelMessage,
   tokenCount?: number | null,
 ): void {
   const database = getDb();
@@ -115,7 +116,7 @@ export function getSessionTokenCount(sessionId: string): number {
 export function replaceSessionMessages(
   groupFolder: string,
   sessionId: string,
-  messages: CoreMessage[],
+  messages: ModelMessage[],
 ): void {
   const database = getDb();
   const deleteStmt = database.prepare(
@@ -148,7 +149,7 @@ export function replaceSessionMessages(
   insertMany();
 }
 
-function serializeMessage(message: CoreMessage): {
+function serializeMessage(message: ModelMessage): {
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string | null;
   toolCalls: string | null;
@@ -156,17 +157,12 @@ function serializeMessage(message: CoreMessage): {
 } {
   const role = message.role as 'user' | 'assistant' | 'system' | 'tool';
   const content = extractContentText(message);
-  const toolCalls = (message as { toolCalls?: unknown }).toolCalls
-    ? JSON.stringify((message as { toolCalls?: unknown }).toolCalls)
-    : null;
-  const toolResults = (message as { toolName?: string; toolCallId?: string })
-    .toolName
-    ? JSON.stringify({
-        toolName: (message as { toolName?: string }).toolName,
-        toolCallId: (message as { toolCallId?: string }).toolCallId,
-        result: content,
-      })
-    : null;
+  const toolCalls =
+    role === 'assistant' && Array.isArray(message.content)
+      ? serializeToolCalls(message.content)
+      : null;
+  const toolResults =
+    role === 'tool' ? JSON.stringify(message.content ?? []) : null;
 
   return {
     role,
@@ -181,27 +177,19 @@ function deserializeMessage(row: {
   content: string | null;
   tool_calls: string | null;
   tool_results: string | null;
-}): CoreMessage {
+}): ModelMessage {
   if (row.role === 'tool') {
-    const toolData = row.tool_results
-      ? (JSON.parse(row.tool_results) as {
-          toolName?: string;
-          toolCallId?: string;
-          result?: string;
-        })
-      : {};
+    const toolResults = normalizeToolResults(row.tool_results, row.content);
     return {
       role: 'tool',
-      content: row.content || toolData.result || '',
-      toolName: toolData.toolName,
-      toolCallId: toolData.toolCallId,
-    } as CoreMessage;
+      content: toolResults,
+    };
   }
 
-  const message: CoreMessage = {
+  const message: ModelMessage = {
     role: row.role,
     content: row.content || '',
-  } as CoreMessage;
+  };
 
   if (row.tool_calls) {
     (message as { toolCalls?: unknown }).toolCalls = JSON.parse(row.tool_calls);
@@ -210,16 +198,19 @@ function deserializeMessage(row: {
   return message;
 }
 
-function extractContentText(message: CoreMessage): string | null {
-  const content = (message as { content?: unknown }).content;
+function extractContentText(message: ModelMessage): string | null {
+  const content = message.content;
   if (typeof content === 'string') return content;
   if (!content) return null;
   if (Array.isArray(content)) {
     return content
       .map((part) => {
         if (typeof part === 'string') return part;
-        if (part && typeof part === 'object' && 'text' in part) {
-          return String((part as { text?: unknown }).text ?? '');
+        if (isTextPart(part)) {
+          return part.text ?? '';
+        }
+        if (isToolResultPart(part)) {
+          return toolOutputToText(part.output);
         }
         return '';
       })
@@ -227,4 +218,194 @@ function extractContentText(message: CoreMessage): string | null {
       .trim();
   }
   return String(content);
+}
+
+function serializeToolCalls(content: ModelMessage['content']): string | null {
+  if (!Array.isArray(content)) return null;
+  const toolCalls = content.filter(isToolCallPart).map((part) => ({
+    toolName: part.toolName,
+    toolCallId: part.toolCallId,
+    input: part.input,
+  }));
+  return toolCalls.length > 0 ? JSON.stringify(toolCalls) : null;
+}
+
+function normalizeToolResults(
+  toolResultsJson: string | null,
+  fallbackContent: string | null,
+): ToolResultPart[] {
+  if (!toolResultsJson) {
+    return fallbackContent ? [createFallbackToolResult(fallbackContent)] : [];
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(toolResultsJson);
+  } catch {
+    return fallbackContent ? [createFallbackToolResult(fallbackContent)] : [];
+  }
+
+  if (Array.isArray(parsed)) {
+    const normalized = parsed
+      .map(normalizeToolResultPart)
+      .filter((part): part is ToolResultPart => part != null);
+    if (normalized.length > 0) return normalized;
+  }
+
+  if (parsed && typeof parsed === 'object') {
+    const maybe = parsed as {
+      toolName?: unknown;
+      toolCallId?: unknown;
+      result?: unknown;
+      output?: unknown;
+    };
+    if (
+      typeof maybe.toolName === 'string' &&
+      typeof maybe.toolCallId === 'string'
+    ) {
+      return [
+        {
+          type: 'tool-result',
+          toolName: maybe.toolName,
+          toolCallId: maybe.toolCallId,
+          output: toToolResultOutput(
+            'output' in maybe ? maybe.output : maybe.result,
+          ),
+        },
+      ];
+    }
+  }
+
+  return fallbackContent ? [createFallbackToolResult(fallbackContent)] : [];
+}
+
+function normalizeToolResultPart(part: unknown): ToolResultPart | null {
+  if (!part || typeof part !== 'object') return null;
+  const maybe = part as {
+    type?: unknown;
+    toolName?: unknown;
+    toolCallId?: unknown;
+    result?: unknown;
+    output?: unknown;
+  };
+  if (
+    (maybe.type === 'tool-result' || maybe.type === undefined) &&
+    typeof maybe.toolName === 'string' &&
+    typeof maybe.toolCallId === 'string'
+  ) {
+    return {
+      type: 'tool-result',
+      toolName: maybe.toolName,
+      toolCallId: maybe.toolCallId,
+      output: toToolResultOutput(
+        'output' in maybe ? maybe.output : maybe.result,
+      ),
+    };
+  }
+  return null;
+}
+
+function createFallbackToolResult(content: string): ToolResultPart {
+  return {
+    type: 'tool-result',
+    toolName: 'unknown',
+    toolCallId: 'unknown',
+    output: { type: 'text', value: content },
+  };
+}
+
+function isTextPart(part: unknown): part is { text: string | undefined } {
+  return !!part && typeof part === 'object' && 'text' in part;
+}
+
+function isToolCallPart(part: unknown): part is ToolCallPart {
+  return (
+    !!part &&
+    typeof part === 'object' &&
+    (part as { type?: unknown }).type === 'tool-call' &&
+    typeof (part as { toolName?: unknown }).toolName === 'string' &&
+    typeof (part as { toolCallId?: unknown }).toolCallId === 'string'
+  );
+}
+
+function isToolResultPart(part: unknown): part is ToolResultPart {
+  return (
+    !!part &&
+    typeof part === 'object' &&
+    (part as { type?: unknown }).type === 'tool-result' &&
+    typeof (part as { toolName?: unknown }).toolName === 'string' &&
+    typeof (part as { toolCallId?: unknown }).toolCallId === 'string'
+  );
+}
+
+function toToolResultOutput(value: unknown): ToolResultOutput {
+  if (isToolResultOutput(value)) return value;
+  if (typeof value === 'string') return { type: 'text', value };
+  if (isJsonValue(value)) return { type: 'json', value };
+
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized != null) {
+      return { type: 'text', value: serialized };
+    }
+  } catch {
+    // ignore
+  }
+
+  return { type: 'text', value: String(value) };
+}
+
+function isToolResultOutput(value: unknown): value is ToolResultOutput {
+  if (!value || typeof value !== 'object') return false;
+  const type = (value as { type?: unknown }).type;
+  if (typeof type !== 'string') return false;
+  if ('value' in (value as object)) return true;
+  return type === 'execution-denied';
+}
+
+function toolOutputToText(output: ToolResultOutput): string {
+  switch (output.type) {
+    case 'text':
+    case 'error-text':
+      return output.value;
+    case 'json':
+    case 'error-json':
+      try {
+        return JSON.stringify(output.value);
+      } catch {
+        return String(output.value);
+      }
+    case 'execution-denied':
+      return output.reason ?? 'Execution denied.';
+    case 'content':
+      return output.value
+        .map((part: { type: string; text?: string }) =>
+          part.type === 'text' ? (part.text ?? '') : '',
+        )
+        .join('')
+        .trim();
+    default:
+      return '';
+  }
+}
+
+function isJsonValue(value: unknown): value is JSONValue {
+  if (
+    value === null ||
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  ) {
+    return true;
+  }
+
+  if (Array.isArray(value)) {
+    return value.every(isJsonValue);
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).every(isJsonValue);
+  }
+
+  return false;
 }

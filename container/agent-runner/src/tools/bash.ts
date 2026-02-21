@@ -23,7 +23,7 @@ function buildSanitizedEnv(): NodeJS.ProcessEnv {
 export function createBashTool() {
   return tool({
     description: 'Run a shell command inside the group workspace.',
-    parameters: z.object({
+    inputSchema: z.object({
       command: z.string().describe('Command to execute'),
       workdir: z
         .string()

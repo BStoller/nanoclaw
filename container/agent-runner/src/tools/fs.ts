@@ -15,7 +15,7 @@ export function createFsTools() {
   return {
     Read: tool({
       description: 'Read a file or directory from disk.',
-      parameters: z.object({
+      inputSchema: z.object({
         path: z.string().describe('File or directory path'),
         offset: z.number().int().optional().describe('Line offset (1-indexed)'),
         limit: z.number().int().optional().describe('Max lines to return'),
@@ -49,7 +49,7 @@ export function createFsTools() {
     }),
     Write: tool({
       description: 'Write a file to disk, creating directories as needed.',
-      parameters: z.object({
+      inputSchema: z.object({
         path: z.string().describe('File path'),
         content: z.string().describe('File contents'),
       }),
@@ -62,7 +62,7 @@ export function createFsTools() {
     }),
     Edit: tool({
       description: 'Replace a text snippet in a file.',
-      parameters: z.object({
+      inputSchema: z.object({
         path: z.string().describe('File path'),
         oldText: z.string().describe('Text to replace'),
         newText: z.string().describe('Replacement text'),
@@ -88,7 +88,7 @@ export function createFsTools() {
     }),
     Glob: tool({
       description: 'List files matching a glob pattern.',
-      parameters: z.object({
+      inputSchema: z.object({
         pattern: z.string().describe('Glob pattern'),
         cwd: z.string().optional().describe('Working directory'),
       }),
@@ -104,7 +104,7 @@ export function createFsTools() {
     }),
     Grep: tool({
       description: 'Search file contents using a regex pattern.',
-      parameters: z.object({
+      inputSchema: z.object({
         pattern: z.string().describe('Regex pattern'),
         path: z.string().optional().describe('Directory to search'),
         include: z.string().optional().describe('Optional glob filter'),
