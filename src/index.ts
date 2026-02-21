@@ -159,8 +159,14 @@ async function handleCommandMessages(
         'Session cleared. New conversation will start on next message.',
       );
     } else if (command === 'status') {
-      const sessionId =
-        sessions[group.folder] || getOrCreateSessionId(group.folder);
+      const sessionId = sessions[group.folder];
+      if (!sessionId) {
+        await channel.sendMessage(
+          chatJid,
+          `Status: group=${group.folder} session=none (no active session)`,
+        );
+        return;
+      }
       const modelProvider = group.modelProvider || 'opencode-zen';
       const modelName = group.modelName || 'kimi-k2.5';
       const messageCount = getSessionMessageCount(group.folder, sessionId);
