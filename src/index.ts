@@ -110,6 +110,8 @@ function loadState(): void {
   sessions = {};
   for (const [jid, data] of Object.entries(sessionData)) {
     sessions[jid] = data.sessionId;
+    // Note: agentId is stored in DB but we resolve it from ROUTES at runtime
+    // This ensures session state persists across restarts
   }
 
   logger.info(
@@ -388,8 +390,11 @@ async function runAgent(
   // Get or create session for this JID
   const sessionId =
     sessions[chatJid] || getOrCreateSessionId(chatJid, agent.id);
-  sessions[chatJid] = sessionId;
-  setSession(chatJid, agent.id, sessionId);
+  // Only save to DB if this is a new session (not already loaded from DB)
+  if (!sessions[chatJid]) {
+    sessions[chatJid] = sessionId;
+    setSession(chatJid, agent.id, sessionId);
+  }
 
   try {
     const output = await runAgentInput(
