@@ -27,10 +27,61 @@ export class DiscordChannel implements Channel {
   private client: Client | null = null;
   private opts: DiscordChannelOpts;
   private botToken: string;
+  private processingMessages: Map<
+    string,
+    { messageId: string; timeout: NodeJS.Timeout }
+  > = new Map();
 
   constructor(botToken: string, opts: DiscordChannelOpts) {
     this.botToken = botToken;
     this.opts = opts;
+  }
+
+  private async addAcknowledgement(
+    jid: string,
+    message: Message,
+  ): Promise<void> {
+    try {
+      await message.react('👀');
+
+      // Set a safety timeout to auto-remove reaction after 5 minutes
+      const timeout = setTimeout(
+        () => {
+          this.clearAcknowledgement(jid);
+        },
+        5 * 60 * 1000,
+      );
+
+      this.processingMessages.set(jid, { messageId: message.id, timeout });
+    } catch (err) {
+      logger.debug({ jid, err }, 'Failed to add acknowledgement reaction');
+    }
+  }
+
+  private async clearAcknowledgement(jid: string): Promise<void> {
+    const entry = this.processingMessages.get(jid);
+    if (!entry) return;
+
+    clearTimeout(entry.timeout);
+
+    try {
+      const channelId = jid.replace(/^dc:/, '');
+      const channel = await this.client?.channels.fetch(channelId);
+      if (!channel || !('messages' in channel)) return;
+
+      const textChannel = channel as TextChannel;
+      const message = await textChannel.messages.fetch(entry.messageId);
+      if (message) {
+        // Remove the bot's own reaction (👀)
+        await message.reactions.cache
+          .get('👀')
+          ?.users.remove(this.client?.user?.id || '');
+      }
+    } catch (err) {
+      logger.debug({ jid, err }, 'Failed to clear acknowledgement reaction');
+    } finally {
+      this.processingMessages.delete(jid);
+    }
   }
 
   async connect(): Promise<void> {
@@ -142,6 +193,9 @@ export class DiscordChannel implements Channel {
         return;
       }
 
+      // Add acknowledgement reaction to show we're processing
+      await this.addAcknowledgement(chatJid, message);
+
       // Deliver message — startMessageLoop() will pick it up
       this.opts.onMessage(chatJid, {
         id: msgId,
@@ -186,6 +240,9 @@ export class DiscordChannel implements Channel {
       logger.warn('Discord client not initialized');
       return;
     }
+
+    // Clear acknowledgement reaction before sending response
+    await this.clearAcknowledgement(jid);
 
     try {
       const channelId = jid.replace(/^dc:/, '');
