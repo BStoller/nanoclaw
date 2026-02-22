@@ -38,11 +38,29 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 Files you create are saved in `/workspace/group/`. Use this for notes, research, or anything that should persist.
 
+## Update and Restart (Host)
+
+Run these commands from `/home/ubuntu/nanoclaw`:
+
+```
+npm install
+npm run build
+systemctl --user restart nanoclaw
+```
+
+Check status/logs:
+
+```
+systemctl --user status nanoclaw
+tail -f logs/nanoclaw.log
+```
+
 ## Memory
 
 The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.
 
 When you learn something important:
+
 - Create files for structured data (e.g., `customers.md`, `preferences.md`)
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
@@ -50,9 +68,10 @@ When you learn something important:
 ## Message Formatting
 
 NEVER use markdown. Only use WhatsApp/Telegram formatting:
-- *single asterisks* for bold (NEVER **double asterisks**)
+
+- _single asterisks_ for bold (NEVER **double asterisks**)
 - _underscores_ for italic
 - • bullet points
-- ```triple backticks``` for code
+- `triple backticks` for code
 
 No ## headings. No [links](url). No **double stars**.

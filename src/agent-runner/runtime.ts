@@ -241,6 +241,28 @@ async function maybeCompactSession(
   activeCompactions.delete(sessionId);
 }
 
+async function maybeCompactSessionPreflight(
+  input: AgentInput,
+  sessionId: string,
+  promptText: string,
+  secrets: AgentSecrets,
+): Promise<void> {
+  const config = getModelConfig(input.modelProvider, input.modelName);
+  const threshold = getCompactionThreshold(config);
+  if (activeCompactions.has(sessionId)) return;
+
+  const messages = loadMessages(input.groupFolder, sessionId);
+  if (messages.length < 4) return;
+
+  const estimatedTokens =
+    estimateTokenCount(messages) + Math.ceil(promptText.length / 4);
+  if (estimatedTokens < threshold) return;
+
+  activeCompactions.add(sessionId);
+  await compactSession(input, sessionId, secrets);
+  activeCompactions.delete(sessionId);
+}
+
 async function compactSession(
   input: AgentInput,
   sessionId: string,
@@ -317,6 +339,19 @@ function buildSummaryPrompt(messages: ModelMessage[]): string {
     lines.push(`${label}: ${content}`);
   }
   return lines.join('\n');
+}
+
+function estimateTokenCount(messages: ModelMessage[]): number {
+  let charCount = 0;
+  for (const msg of messages) {
+    const content = extractContentText(msg);
+    if (content) charCount += content.length;
+    const toolCalls = extractToolCalls(msg);
+    if (toolCalls.length > 0) {
+      charCount += JSON.stringify(toolCalls).length;
+    }
+  }
+  return Math.ceil(charCount / 4);
 }
 
 function archiveConversation(
@@ -558,6 +593,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
           { group: input.groupFolder, sessionId },
           'Starting agent query',
         );
+        await maybeCompactSessionPreflight(input, sessionId, prompt, secrets);
         const { newSessionId, responseText, usageTokens } = await runQuery(
           prompt,
           sessionId,
