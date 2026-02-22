@@ -12,16 +12,6 @@ import {
   setAgent,
 } from './db.js';
 
-interface LegacyGroup {
-  jid: string;
-  folder: string;
-}
-
-interface LegacySession {
-  folder: string;
-  sessionId: string;
-}
-
 /**
  * Migration: groups/ -> agents/ + sessions/
  *

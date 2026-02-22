@@ -4,21 +4,28 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 ## Quick Context
 
-Single Node.js process that connects to WhatsApp and runs the Claude Agent SDK in-process. Groups share the host filesystem, with per-group sessions in SQLite.
+Single Node.js process that connects to WhatsApp and runs the Claude Agent SDK in-process. Agents define behavior/personality, while sessions track per-channel conversation state in SQLite.
 
 ## Key Files
 
-| File                          | Purpose                                             |
-| ----------------------------- | --------------------------------------------------- |
-| `src/index.ts`                | Orchestrator: state, message loop, agent invocation |
-| `src/channels/whatsapp.ts`    | WhatsApp connection, auth, send/receive             |
-| `src/agent-runner/runtime.ts` | Host agent runtime (streaming, tools, live piping)  |
-| `src/router.ts`               | Message formatting and outbound routing             |
-| `src/config.ts`               | Trigger pattern, paths, intervals                   |
-| `src/task-scheduler.ts`       | Runs scheduled tasks                                |
-| `src/db.ts`                   | SQLite operations                                   |
-| `groups/{name}/CLAUDE.md`     | Per-group memory (isolated)                         |
-| `groups/{name}/.nanoclaw/`    | Per-group conversation store                        |
+| File                          | Purpose                                               |
+| ----------------------------- | ----------------------------------------------------- |
+| `src/index.ts`                | Orchestrator: state, message loop, agent invocation   |
+| `src/channels/whatsapp.ts`    | WhatsApp connection, auth, send/receive               |
+| `src/agent-runner/runtime.ts` | Host agent runtime (streaming, tools, live piping)    |
+| `src/router.ts`               | Message formatting, routing, and JID-to-agent mapping |
+| `src/config.ts`               | Trigger pattern, paths, intervals                     |
+| `src/task-scheduler.ts`       | Runs scheduled tasks                                  |
+| `src/db.ts`                   | SQLite operations                                     |
+| `agents/{id}/CLAUDE.md`       | Per-agent instructions and personality                |
+| `sessions/{jid}/`             | Per-channel conversation history (JID-based)          |
+
+## Architecture
+
+- **Agents** (`agents/{id}/`): Define agent personality, tools, and configuration via `CLAUDE.md`
+- **Sessions** (`sessions/{jid}/`): Store conversation history per JID (channel identifier)
+- **Routes** (`src/router.ts` + database): Map JIDs to agents for message routing
+- Multiple channels can share the same agent while maintaining separate conversation histories
 
 ## Skills
 

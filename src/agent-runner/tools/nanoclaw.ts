@@ -9,6 +9,7 @@ import {
   getAllTasks,
   getTaskById,
   updateTask,
+  setRoute,
 } from '../../db.js';
 import { Agent } from '../../types.js';
 import { resolveAgentId, addRoute, ROUTES } from '../../router.js';
@@ -266,7 +267,7 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
     }),
     add_route: tool({
       description:
-        'Add a route from a JID to an agent (main agent only). Modifies the routing table at runtime (not persisted).',
+        'Add a route from a JID to an agent (main agent only). Routes are persisted to the database and survive restarts.',
       inputSchema: z.object({
         jid: z
           .string()
@@ -284,10 +285,12 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
           return { error: `Agent "${input.agent_id}" not found.` };
         }
 
+        // Add route in-memory and persist to database
         addRoute(input.jid, input.agent_id);
+        setRoute(input.jid, input.agent_id);
         return {
           ok: true,
-          message: `Route added: ${input.jid} -> ${input.agent_id}. Note: This route is temporary. Add to src/router.ts ROUTES for persistence.`,
+          message: `Route added and persisted: ${input.jid} -> ${input.agent_id}.`,
         };
       },
     }),
