@@ -128,12 +128,13 @@ function getCachedFileContent(filePath: string): string | null {
       const watcher = fs.watch(filePath, (eventType) => {
         if (eventType === 'change') {
           logger.debug({ filePath }, 'CLAUDE.md file changed, clearing cache');
-          // Remove from cache so it will be re-read on next access
+          // Get the entry and remove from cache first, then close watcher
+          // This prevents race conditions if the callback fires rapidly
           const entry = fileCache.get(filePath);
+          fileCache.delete(filePath);
           if (entry?.watcher) {
             entry.watcher.close();
           }
-          fileCache.delete(filePath);
         }
       });
 
