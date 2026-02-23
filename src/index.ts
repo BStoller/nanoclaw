@@ -390,6 +390,8 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
+  // Track text already sent to avoid duplicate content across steps
+  let lastTextSent = '';
 
   const output = await runAgent(agent, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
@@ -402,8 +404,15 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
       const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
       logger.info({ agent: agent.name }, `Agent output: ${raw.slice(0, 200)}`);
       if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+        // Only send text that hasn't been sent before (delta)
+        const textToSend = text.startsWith(lastTextSent)
+          ? text.slice(lastTextSent.length).trim()
+          : text;
+        if (textToSend) {
+          await channel.sendMessage(chatJid, textToSend);
+          outputSentToUser = true;
+        }
+        lastTextSent = text;
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
