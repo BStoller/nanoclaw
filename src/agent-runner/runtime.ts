@@ -193,7 +193,6 @@ async function runQuery(
 
   let responseMessages: ModelMessage[] = [];
   let usageTokens = 0;
-  let responseText = '';
 
   const result = streamText({
     model,
@@ -207,17 +206,16 @@ async function runQuery(
     },
   });
 
-  for await (const chunk of result.textStream) {
-    responseText += chunk;
+  // Consume the stream to drive the completion, but we get the final
+  // response from responseMessages which is more reliable (especially
+  // when tools are used)
+  for await (const _chunk of result.textStream) {
+    // Stream is consumed to trigger onFinish
   }
 
-  if (responseMessages.length === 0 && responseText) {
-    responseMessages = [{ role: 'assistant', content: responseText }];
-  }
-
-  // Extract final assistant response from messages if responseText is empty
-  // This happens when tools are used - the content is in messages, not text stream
-  if (!responseText && responseMessages.length > 0) {
+  // Extract final assistant response from messages
+  let responseText = '';
+  if (responseMessages.length > 0) {
     const lastAssistant = responseMessages
       .filter((m) => m.role === 'assistant')
       .pop();
