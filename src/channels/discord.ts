@@ -430,6 +430,12 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
   }
 
   async disconnect(): Promise<void> {
+    // Clear all typing intervals before disconnect
+    for (const interval of this.typingIntervals.values()) {
+      clearInterval(interval);
+    }
+    this.typingIntervals.clear();
+
     if (this.client) {
       this.client.destroy();
       this.client = null;
