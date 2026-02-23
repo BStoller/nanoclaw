@@ -170,6 +170,36 @@ function splitCommandMessages(
   return { commands, nonCommands };
 }
 
+export async function executeCommand(
+  chatJid: string,
+  command: CommandType | string,
+): Promise<string> {
+  const agent = resolveAgentForJid(chatJid);
+  if (!agent) {
+    return `No agent configured for this channel. Please add a route in src/router.ts.`;
+  }
+
+  if (command === 'clear') {
+    clearSession(chatJid);
+    delete sessions[chatJid];
+    deleteSession(chatJid);
+    return 'Session cleared. New conversation will start on next message.';
+  } else if (command === 'status') {
+    const sessionId = sessions[chatJid];
+    if (!sessionId) {
+      return `Status: agent=${agent.id} session=none (no active session)`;
+    }
+    const modelProvider = agent.modelProvider || 'opencode-zen';
+    const modelName = agent.modelName || 'kimi-k2.5';
+    const messageCount = getSessionMessageCount(chatJid, sessionId);
+    const tokenCount = getSessionTokenCount(chatJid, sessionId);
+    const lastTs = getSessionLastTimestamp(chatJid, sessionId) || 'none';
+    return `Status: agent=${agent.id} session=${sessionId} model=${modelProvider}/${modelName} messages=${messageCount} tokens=${tokenCount} last=${lastTs}`;
+  }
+
+  return 'Unknown command.';
+}
+
 async function handleCommandMessages(
   chatJid: string,
   agent: Agent,
@@ -179,33 +209,8 @@ async function handleCommandMessages(
   if (commands.length === 0) return;
 
   for (const { message, command } of commands) {
-    if (command === 'clear') {
-      clearSession(chatJid);
-      delete sessions[chatJid];
-      deleteSession(chatJid);
-      await channel.sendMessage(
-        chatJid,
-        'Session cleared. New conversation will start on next message.',
-      );
-    } else if (command === 'status') {
-      const sessionId = sessions[chatJid];
-      if (!sessionId) {
-        await channel.sendMessage(
-          chatJid,
-          `Status: agent=${agent.id} session=none (no active session)`,
-        );
-        return;
-      }
-      const modelProvider = agent.modelProvider || 'opencode-zen';
-      const modelName = agent.modelName || 'kimi-k2.5';
-      const messageCount = getSessionMessageCount(chatJid, sessionId);
-      const tokenCount = getSessionTokenCount(chatJid, sessionId);
-      const lastTs = getSessionLastTimestamp(chatJid, sessionId) || 'none';
-      await channel.sendMessage(
-        chatJid,
-        `Status: agent=${agent.id} session=${sessionId} model=${modelProvider}/${modelName} messages=${messageCount} tokens=${tokenCount} last=${lastTs}`,
-      );
-    }
+    const response = await executeCommand(chatJid, command);
+    await channel.sendMessage(chatJid, response);
 
     if (
       !lastCommandTimestamp[chatJid] ||
@@ -636,6 +641,7 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => ({}), // Deprecated, returns empty
+    executeCommand,
   };
 
   // Create and connect channels

@@ -29,6 +29,7 @@ vi.mock('discord.js', () => {
     MessageCreate: 'messageCreate',
     ClientReady: 'ready',
     Error: 'error',
+    InteractionCreate: 'interactionCreate',
   };
 
   const GatewayIntentBits = {
@@ -81,16 +82,58 @@ vi.mock('discord.js', () => {
     destroy() {
       this._ready = false;
     }
+
+    guilds = {
+      fetch: vi.fn().mockResolvedValue(new Map()),
+    };
   }
 
   // Mock TextChannel type
   class TextChannel {}
+
+  // Mock SlashCommandBuilder
+  class SlashCommandBuilder {
+    private name = '';
+    private description = '';
+
+    setName(name: string) {
+      this.name = name;
+      return this;
+    }
+
+    setDescription(desc: string) {
+      this.description = desc;
+      return this;
+    }
+
+    toJSON() {
+      return { name: this.name, description: this.description };
+    }
+  }
+
+  // Mock REST
+  class REST {
+    setToken(_token: string) {
+      return this;
+    }
+
+    put = vi.fn().mockResolvedValue(undefined);
+  }
+
+  // Mock Routes
+  const Routes = {
+    applicationGuildCommands: (_appId: string, _guildId: string) =>
+      `/applications/${_appId}/guilds/${_guildId}/commands`,
+  };
 
   return {
     Client: MockClient,
     Events,
     GatewayIntentBits,
     TextChannel,
+    SlashCommandBuilder,
+    REST,
+    Routes,
   };
 });
 
@@ -113,6 +156,7 @@ function createTestOpts(
         added_at: '2024-01-01T00:00:00.000Z',
       },
     })),
+    executeCommand: vi.fn().mockResolvedValue('Command executed successfully'),
     ...overrides,
   };
 }
@@ -156,9 +200,7 @@ function createMessage(overrides: {
     member: overrides.memberDisplayName
       ? { displayName: overrides.memberDisplayName }
       : null,
-    guild: overrides.guildName
-      ? { name: overrides.guildName }
-      : null,
+    guild: overrides.guildName ? { name: overrides.guildName } : null,
     channel: {
       name: overrides.channelName ?? 'general',
       messages: {
@@ -629,8 +671,11 @@ describe('DiscordChannel', () => {
 
       await channel.sendMessage('dc:1234567890123456', 'Hello');
 
-      const fetchedChannel = await currentClient().channels.fetch('1234567890123456');
-      expect(currentClient().channels.fetch).toHaveBeenCalledWith('1234567890123456');
+      const fetchedChannel =
+        await currentClient().channels.fetch('1234567890123456');
+      expect(currentClient().channels.fetch).toHaveBeenCalledWith(
+        '1234567890123456',
+      );
     });
 
     it('strips dc: prefix from JID', async () => {
