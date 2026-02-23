@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 
 import {
   ASSISTANT_NAME,
@@ -48,7 +49,7 @@ import {
   getSessionPath,
 } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
-import { Agent, Channel, NewMessage } from './types.js';
+import { Agent, Attachment, Channel, NewMessage } from './types.js';
 import { logger } from './logger.js';
 import {
   clearSession,
@@ -444,6 +445,71 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
+    }
+
+    // Handle pending image attachments from SendImage tool calls
+    if (
+      result.pendingImageAttachments &&
+      result.pendingImageAttachments.length > 0
+    ) {
+      logger.info(
+        {
+          agent: agent.name,
+          chatJid,
+          imageCount: result.pendingImageAttachments.length,
+        },
+        'Sending image attachments',
+      );
+
+      for (const imageAttachment of result.pendingImageAttachments) {
+        try {
+          // Check if channel supports file attachments
+          if (channel.sendMessageWithAttachments) {
+            await channel.sendMessageWithAttachments(
+              chatJid,
+              imageAttachment.caption,
+              [imageAttachment.filePath],
+            );
+
+            // Store outgoing attachment metadata
+            const attachment: Attachment = {
+              id: crypto.randomUUID(),
+              filename: path.basename(imageAttachment.filePath),
+              path: imageAttachment.filePath,
+              mimeType:
+                'image/' + path.extname(imageAttachment.filePath).slice(1),
+              size: fs.statSync(imageAttachment.filePath).size,
+              createdAt: new Date().toISOString(),
+            };
+            storeAttachment(attachment, `outgoing-${Date.now()}`, chatJid);
+
+            logger.debug(
+              {
+                agent: agent.name,
+                chatJid,
+                filePath: imageAttachment.filePath,
+              },
+              'Image attachment sent',
+            );
+          } else {
+            logger.warn(
+              { agent: agent.name, chatJid, channel: channel.name },
+              'Channel does not support file attachments',
+            );
+          }
+        } catch (sendErr) {
+          logger.error(
+            {
+              agent: agent.name,
+              chatJid,
+              filePath: imageAttachment.filePath,
+              error:
+                sendErr instanceof Error ? sendErr.message : String(sendErr),
+            },
+            'Failed to send image attachment',
+          );
+        }
+      }
     }
 
     if (result.status === 'error') {

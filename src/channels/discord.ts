@@ -10,6 +10,7 @@ import {
   ChatInputCommandInteraction,
   Interaction,
 } from 'discord.js';
+import path from 'path';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { logger } from '../logger.js';
@@ -456,6 +457,66 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
       logger.info({ jid, length: text.length }, 'Discord message sent');
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Discord message');
+    }
+  }
+
+  async sendMessageWithAttachments(
+    jid: string,
+    text: string,
+    filePaths: string[],
+  ): Promise<void> {
+    if (!this.client) {
+      logger.warn('Discord client not initialized');
+      return;
+    }
+
+    // Clear acknowledgement reaction before sending response
+    await this.clearAcknowledgement(jid);
+
+    try {
+      const channelId = jid.replace(/^dc:/, '');
+      const channel = await this.client.channels.fetch(channelId);
+
+      if (!channel || !('send' in channel)) {
+        logger.warn({ jid }, 'Discord channel not found or not text-based');
+        return;
+      }
+
+      const textChannel = channel as TextChannel;
+
+      // Prepare file attachments
+      const attachments = filePaths.map((filePath) => ({
+        attachment: filePath,
+        name: path.basename(filePath),
+      }));
+
+      // Send message with attachments
+      // Discord has a 2000 character limit for text with files too
+      const MAX_LENGTH = 2000;
+      const content =
+        text.length <= MAX_LENGTH ? text : text.slice(0, MAX_LENGTH);
+
+      await textChannel.send({
+        content: content || undefined,
+        files: attachments,
+      });
+
+      // If text was truncated, send remaining text as follow-up
+      if (text.length > MAX_LENGTH) {
+        for (let i = MAX_LENGTH; i < text.length; i += MAX_LENGTH) {
+          await textChannel.send(text.slice(i, i + MAX_LENGTH));
+        }
+      }
+
+      logger.info(
+        { jid, fileCount: filePaths.length, textLength: text.length },
+        'Discord message with attachments sent',
+      );
+    } catch (err) {
+      logger.error(
+        { jid, err, fileCount: filePaths.length },
+        'Failed to send Discord message with attachments',
+      );
     }
   }
 

@@ -49,6 +49,10 @@ export interface AgentOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
+  pendingImageAttachments?: Array<{
+    filePath: string;
+    caption: string;
+  }>;
 }
 
 export interface AvailableGroup {
@@ -246,6 +250,7 @@ async function runQuery(
   newSessionId: string;
   responseText: string;
   usageTokens: number;
+  pendingImageAttachments?: Array<{ filePath: string; caption: string }>;
 }> {
   const queryStartTime = Date.now();
   const config = getModelConfig(input.modelProvider, input.modelName);
@@ -531,7 +536,37 @@ async function runQuery(
     'Query completed successfully',
   );
 
-  return { newSessionId: sessionId, responseText, usageTokens };
+  // Extract pending image attachments from tool results
+  const pendingImageAttachments: Array<{ filePath: string; caption: string }> =
+    [];
+
+  for (const message of responseMessages) {
+    if (message.role === 'tool') {
+      // Tool result messages contain the results of tool calls
+      const content = message.content;
+      if (typeof content === 'string') {
+        try {
+          const result = JSON.parse(content);
+          if (result && result.success && result.filePath) {
+            // This is a SendImage tool result
+            pendingImageAttachments.push({
+              filePath: result.filePath,
+              caption: result.caption || '',
+            });
+          }
+        } catch {
+          // Not JSON, skip
+        }
+      }
+    }
+  }
+
+  return {
+    newSessionId: sessionId,
+    responseText,
+    usageTokens,
+    pendingImageAttachments,
+  };
 }
 
 async function maybeCompactSession(
