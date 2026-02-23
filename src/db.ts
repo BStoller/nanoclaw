@@ -340,6 +340,30 @@ export function getNewMessages(
   return { messages: rows, newTimestamp };
 }
 
+export function getNewMessagesAll(
+  lastTimestamp: string,
+  botPrefix: string,
+): { messages: NewMessage[]; newTimestamp: string } {
+  const sql = `
+    SELECT id, chat_jid, sender, sender_name, content, timestamp
+    FROM messages
+    WHERE timestamp > ?
+      AND is_bot_message = 0 AND content NOT LIKE ?
+    ORDER BY timestamp
+  `;
+
+  const rows = db
+    .prepare(sql)
+    .all(lastTimestamp, `${botPrefix}:%`) as NewMessage[];
+
+  let newTimestamp = lastTimestamp;
+  for (const row of rows) {
+    if (row.timestamp > newTimestamp) newTimestamp = row.timestamp;
+  }
+
+  return { messages: rows, newTimestamp };
+}
+
 export function getMessagesSince(
   chatJid: string,
   sinceTimestamp: string,

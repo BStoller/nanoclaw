@@ -332,6 +332,10 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
       await this.addAcknowledgement(chatJid, message);
 
       // Deliver message — startMessageLoop() will pick it up
+      logger.info(
+        { chatJid, chatName, sender: senderName, agentId, messageId: msgId },
+        'Dispatching inbound message',
+      );
       this.opts.onMessage(chatJid, {
         id: msgId,
         chat_jid: chatJid,

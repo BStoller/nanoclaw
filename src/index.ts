@@ -27,6 +27,7 @@ import {
   deleteSession,
   getMessagesSince,
   getNewMessages,
+  getNewMessagesAll,
   getRouterState,
   initDatabase,
   setAgent,
@@ -43,6 +44,7 @@ import {
   resolveAgentId,
   loadRoutesFromDb,
   getRouteJids,
+  getSessionPath,
 } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Agent, Channel, NewMessage } from './types.js';
@@ -278,13 +280,47 @@ function resolveAgentForJid(jid: string): Agent | null {
 }
 
 function ensureSessionForJid(chatJid: string): void {
-  if (sessions[chatJid]) return;
   const agent = resolveAgentForJid(chatJid);
   if (!agent) return;
-  const sessionId = getOrCreateSessionId(chatJid, agent.id);
-  getSessionMessageCount(chatJid, sessionId);
-  sessions[chatJid] = sessionId;
-  setSession(chatJid, agent.id, sessionId);
+  const sessionDir = getSessionPath(chatJid);
+  const sessionFilePath = path.join(sessionDir, 'session.json');
+  const existingSessionId = sessions[chatJid];
+  const sessionFileExists = fs.existsSync(sessionFilePath);
+  if (existingSessionId && sessionFileExists) return;
+  logger.info(
+    {
+      chatJid,
+      agentId: agent.id,
+      sessionDir,
+      sessionFilePath,
+      existingSessionId,
+      sessionFileExists,
+      cwd: process.cwd(),
+    },
+    'Ensuring session for routed JID',
+  );
+  try {
+    let sessionId = existingSessionId;
+    if (!sessionId) {
+      sessionId = getOrCreateSessionId(chatJid, agent.id);
+    } else if (!sessionFileExists) {
+      fs.mkdirSync(sessionDir, { recursive: true });
+      fs.writeFileSync(
+        sessionFilePath,
+        JSON.stringify({ sessionId, agentId: agent.id, jid: chatJid }, null, 2),
+      );
+    }
+    getSessionMessageCount(chatJid, sessionId);
+    const sessionFileNowExists = fs.existsSync(sessionFilePath);
+    logger.info(
+      { chatJid, sessionId, sessionFileExists: sessionFileNowExists },
+      'Session ensured',
+    );
+    sessions[chatJid] = sessionId;
+    setSession(chatJid, agent.id, sessionId);
+  } catch (err) {
+    logger.error({ chatJid, err }, 'Failed to ensure session');
+  }
 }
 
 /**
@@ -493,12 +529,15 @@ async function startMessageLoop(): Promise<void> {
     try {
       // Get all JIDs that have routes
       const routedJids = getRouteJids();
+      const hasWildcard = routedJids.some((jid) => jid.includes('*'));
 
-      const { messages, newTimestamp } = getNewMessages(
-        routedJids,
-        lastTimestamp,
-        ASSISTANT_NAME,
-      );
+      const { messages: rawMessages, newTimestamp } = hasWildcard
+        ? getNewMessagesAll(lastTimestamp, ASSISTANT_NAME)
+        : getNewMessages(routedJids, lastTimestamp, ASSISTANT_NAME);
+
+      const messages = hasWildcard
+        ? rawMessages.filter((msg) => resolveAgentId(msg.chat_jid))
+        : rawMessages;
 
       if (messages.length > 0) {
         logger.info({ count: messages.length }, 'New messages');
