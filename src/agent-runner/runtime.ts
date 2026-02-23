@@ -341,9 +341,12 @@ async function runQuery(
       tools,
       maxOutputTokens: config.maxOutputTokens,
       stopWhen: stepCountIs(500),
-      onFinish: (event: any) => {
-        responseMessages = event.response?.messages ?? [];
+      onFinish: (event) => {
+        responseMessages = event.response.messages ?? [];
         usageTokens = event.totalUsage?.totalTokens ?? 0;
+        const lastAssistant = responseMessages
+          .filter((m) => m.role === 'assistant')
+          .pop();
         logger.debug(
           {
             agent: input.agentId,
@@ -351,6 +354,15 @@ async function runQuery(
             responseMessageCount: responseMessages.length,
             usageTokens,
             finishReason: event.finishReason,
+            responseMessages,
+            lastAssistantKeys: lastAssistant
+              ? Object.keys(lastAssistant as Record<string, unknown>)
+              : [],
+            lastAssistantContentType: lastAssistant
+              ? Array.isArray(lastAssistant.content)
+                ? 'array'
+                : typeof lastAssistant.content
+              : 'none',
           },
           'streamText onFinish callback',
         );
@@ -817,6 +829,15 @@ function formatTranscriptMarkdown(messages: ModelMessage[]): string {
 
 function extractContentText(message: ModelMessage): string | null {
   const content = message.content;
+  logger.debug(
+    {
+      role: message.role,
+      contentType: Array.isArray(content) ? 'array' : typeof content,
+      hasContent: !!content,
+      keys: Object.keys(message as Record<string, unknown>),
+    },
+    'extractContentText input',
+  );
   if (typeof content === 'string') return content;
   if (!content) return null;
   if (Array.isArray(content)) {
