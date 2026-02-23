@@ -2,7 +2,13 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import type { JSONValue, ModelMessage, ToolCallPart, ToolResultPart } from 'ai';
+import type {
+  JSONValue,
+  ModelMessage,
+  TextPart,
+  ToolCallPart,
+  ToolResultPart,
+} from 'ai';
 
 import { SESSIONS_DIR } from '../config.js';
 import { getSessionPath } from '../router.js';
@@ -298,7 +304,9 @@ function extractContentText(message: ModelMessage): string | null {
   return String(content);
 }
 
-function serializeToolCalls(parts: Array<unknown>): string {
+function serializeToolCalls(
+  parts: Array<ModelMessage['content'][number]>,
+): string {
   const toolCalls = parts.filter(isToolCallPart).map((part) => ({
     toolName: part.toolName,
     toolCallId: part.toolCallId,
@@ -335,26 +343,27 @@ function toolOutputToText(output: JSONValue | unknown): string {
   }
 }
 
-function isTextPart(part: ModelMessage['content'][number]) {
-  return (
-    !!part && typeof part === 'object' && part.type === 'text' && 'text' in part
-  );
+function isTextPart(part: ModelMessage['content'][number]): part is TextPart {
+  if (!part || typeof part !== 'object') return false;
+  return part.type === 'text' && typeof part.text === 'string';
 }
 
-function isToolCallPart(part: ModelMessage['content'][number]) {
+function isToolCallPart(
+  part: ModelMessage['content'][number],
+): part is ToolCallPart {
+  if (!part || typeof part !== 'object') return false;
   return (
-    !!part &&
-    typeof part === 'object' &&
     part.type === 'tool-call' &&
     typeof part.toolName === 'string' &&
     typeof part.toolCallId === 'string'
   );
 }
 
-function isToolResultPart(part: ModelMessage['content'][number]) {
+function isToolResultPart(
+  part: ModelMessage['content'][number],
+): part is ToolResultPart {
+  if (!part || typeof part !== 'object') return false;
   return (
-    !!part &&
-    typeof part === 'object' &&
     part.type === 'tool-result' &&
     typeof part.toolName === 'string' &&
     typeof part.toolCallId === 'string'
