@@ -76,6 +76,18 @@ export function deleteRouteInMemory(jid: string): void {
 }
 
 /**
+ * Get route information for a JID.
+ * Returns the agent ID and JID for context.
+ */
+export function getRouteInfo(
+  jid: string,
+): { jid: string; agentId: string } | null {
+  const agentId = resolveAgentId(jid);
+  if (!agentId) return null;
+  return { jid, agentId };
+}
+
+/**
  * Get the filesystem path for an agent's folder.
  */
 export function getAgentPath(agentId: string): string {
