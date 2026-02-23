@@ -871,6 +871,7 @@ async function main(): Promise<void> {
         console.log(`Warning: no channel owns JID ${jid}, cannot send message`);
         return;
       }
+      // Safety net: middleware extracts reasoning, but we double-check here
       const text = formatOutbound(rawText);
       if (text) await channel.sendMessage(jid, text);
     },

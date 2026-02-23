@@ -120,6 +120,7 @@ export function formatMessages(messages: NewMessage[]): string {
   return `<messages>\n${lines.join('\n')}\n</messages>`;
 }
 
+// Safety net: strips any reasoning tags that weren't caught by middleware
 export function stripReasoningTags(text: string): string {
   return text.replace(/<reasoning>[\s\S]*?<\/reasoning>/g, '').trim();
 }
