@@ -589,8 +589,8 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       prompt += '\n' + pending.join('\n');
     }
 
-    // Accumulate all responses across the conversation loop
-    let finalResponseParts: string[] = [];
+    // Track the last response - only send the final one at the end
+    let lastResponse: string | null = null;
     let hadError = false;
     let errorMessage = '';
 
@@ -610,9 +610,9 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         );
         sessionId = newSessionId;
 
-        // Accumulate response text instead of sending immediately
+        // Store this response (will be overwritten if more piped messages arrive)
         if (responseText) {
-          finalResponseParts.push(responseText);
+          lastResponse = responseText;
         }
 
         void maybeCompactSession(input, sessionId, usageTokens, secrets);
@@ -628,12 +628,11 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         prompt = nextMessage;
       }
 
-      // Send the complete accumulated response once at the end
-      const finalResponse = finalResponseParts.join('\n\n');
+      // Send only the final response once at the end
       if (onOutput) {
         await onOutput({
           status: 'success',
-          result: finalResponse || null,
+          result: lastResponse,
           newSessionId: sessionId,
         });
         // Send completion marker
@@ -646,7 +645,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
 
       return {
         status: 'success',
-        result: finalResponse || null,
+        result: lastResponse,
         newSessionId: sessionId,
       };
     } catch (err) {
@@ -661,12 +660,11 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       closePipe(pipe);
     }
 
-    // Handle error case - send what we accumulated before the error
+    // Handle error case - send the last response we got before the error
     if (hadError) {
-      const partialResponse = finalResponseParts.join('\n\n');
       const output: AgentOutput = {
         status: 'error',
-        result: partialResponse || null,
+        result: lastResponse,
         newSessionId: sessionId,
         error: errorMessage,
       };
