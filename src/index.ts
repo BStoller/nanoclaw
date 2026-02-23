@@ -401,7 +401,7 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
   const output = await runAgent(agent, prompt, chatJid, async (result) => {
     // Streaming output callback — called for each agent result
     if (result.result) {
-      const text =
+      const raw =
         typeof result.result === 'string'
           ? result.result
           : JSON.stringify(result.result);
