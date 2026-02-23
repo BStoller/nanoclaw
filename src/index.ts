@@ -390,7 +390,8 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
-  // Track the final response to send at the end
+  let sentResponseCount = 0;
+  // Track the final response as a fallback if we never send in callback
   let finalResponseText = '';
 
   const output = await runAgent(agent, prompt, chatJid, async (result) => {
@@ -406,6 +407,10 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
       // Store as the final response (overwrites previous steps)
       if (text) {
         finalResponseText = text;
+        await channel.sendMessage(chatJid, text);
+        sentResponseCount += 1;
+        outputSentToUser = true;
+        await channel.setTyping?.(chatJid, false);
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
@@ -416,8 +421,8 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
     }
   });
 
-  // Send only the final response after the agent run completes
-  if (finalResponseText) {
+  // Fallback: if no response was sent in the callback, send the final response now
+  if (sentResponseCount === 0 && finalResponseText) {
     await channel.sendMessage(chatJid, finalResponseText);
     outputSentToUser = true;
   }
