@@ -589,6 +589,11 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       prompt += '\n' + pending.join('\n');
     }
 
+    // Accumulate all responses across the conversation loop
+    let finalResponseParts: string[] = [];
+    let hadError = false;
+    let errorMessage = '';
+
     try {
       while (true) {
         logger.debug(
@@ -605,22 +610,12 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         );
         sessionId = newSessionId;
 
-        const output: AgentOutput = {
-          status: 'success',
-          result: responseText || null,
-          newSessionId: sessionId,
-        };
-        if (onOutput) await onOutput(output);
+        // Accumulate response text instead of sending immediately
+        if (responseText) {
+          finalResponseParts.push(responseText);
+        }
 
         void maybeCompactSession(input, sessionId, usageTokens, secrets);
-
-        if (onOutput) {
-          await onOutput({
-            status: 'success',
-            result: null,
-            newSessionId: sessionId,
-          });
-        }
 
         const nextMessage = await waitForPipeMessage(pipe);
         if (nextMessage === null) {
@@ -633,29 +628,58 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         prompt = nextMessage;
       }
 
+      // Send the complete accumulated response once at the end
+      const finalResponse = finalResponseParts.join('\n\n');
+      if (onOutput) {
+        await onOutput({
+          status: 'success',
+          result: finalResponse || null,
+          newSessionId: sessionId,
+        });
+        // Send completion marker
+        await onOutput({
+          status: 'success',
+          result: null,
+          newSessionId: sessionId,
+        });
+      }
+
       return {
         status: 'success',
-        result: null,
+        result: finalResponse || null,
         newSessionId: sessionId,
       };
     } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      errorMessage = err instanceof Error ? err.message : String(err);
+      hadError = true;
       logger.error(
         { agent: input.agentId, error: errorMessage },
         'Agent error',
       );
+    } finally {
+      activeRuns.delete(input.chatJid);
+      closePipe(pipe);
+    }
+
+    // Handle error case - send what we accumulated before the error
+    if (hadError) {
+      const partialResponse = finalResponseParts.join('\n\n');
       const output: AgentOutput = {
         status: 'error',
-        result: null,
+        result: partialResponse || null,
         newSessionId: sessionId,
         error: errorMessage,
       };
       if (onOutput) await onOutput(output);
       return output;
-    } finally {
-      activeRuns.delete(input.chatJid);
-      closePipe(pipe);
     }
+
+    // This line is unreachable but satisfies TypeScript
+    return {
+      status: 'success',
+      result: null,
+      newSessionId: sessionId,
+    };
   };
 
   return { run, pipeMessage, close };
