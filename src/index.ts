@@ -391,7 +391,7 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
   await channel.setTyping?.(chatJid, true);
   let hadError = false;
   let outputSentToUser = false;
-  let streamCallbackCount = 0;
+  let sentResponseCount = 0;
 
   logger.debug(
     { agent: agent.name, chatJid, promptLength: prompt.length },
@@ -399,9 +399,6 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
   );
 
   const output = await runAgent(agent, prompt, chatJid, async (result) => {
-    streamCallbackCount++;
-    const callbackStart = Date.now();
-
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw =
@@ -415,7 +412,7 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
         {
           agent: agent.name,
           chatJid,
-          streamCallbackCount,
+          sentResponseCount,
           rawOutputLength: raw.length,
           cleanedOutputLength: text.length,
           rawPreview: raw.slice(0, 200),
@@ -426,7 +423,9 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
       if (text) {
         try {
           await channel.sendMessage(chatJid, text);
+          sentResponseCount += 1;
           outputSentToUser = true;
+          await channel.setTyping?.(chatJid, false);
           logger.debug(
             { agent: agent.name, chatJid, messageLength: text.length },
             'Message sent to channel',
@@ -453,7 +452,7 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
         {
           agent: agent.name,
           chatJid,
-          streamCallbackCount,
+          sentResponseCount,
           error: result.error,
         },
         'Agent reported error in stream callback',
@@ -466,16 +465,6 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
         'Session ID updated in stream callback',
       );
     }
-
-    logger.debug(
-      {
-        agent: agent.name,
-        chatJid,
-        streamCallbackCount,
-        durationMs: Date.now() - callbackStart,
-      },
-      'Stream callback completed',
-    );
   });
 
   await channel.setTyping?.(chatJid, false);
@@ -494,7 +483,7 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
           output,
           hadError,
           outputSentToUser,
-          streamCallbackCount,
+          sentResponseCount,
           processingDurationMs: processingDuration,
         },
         'Agent error after output was sent, skipping cursor rollback to prevent duplicates',
@@ -524,7 +513,7 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
       chatJid,
       output,
       outputSentToUser,
-      streamCallbackCount,
+      sentResponseCount,
       processingDurationMs: processingDuration,
     },
     'Message processing completed successfully',

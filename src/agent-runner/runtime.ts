@@ -23,6 +23,7 @@ import {
   replaceSessionMessages,
   saveMessage,
 } from './session-store.js';
+import { getRouteInfo } from '../router.js';
 
 const DEFAULT_MODEL_PROVIDER = 'opencode-zen';
 const DEFAULT_MODEL_NAME = 'kimi-k2.5';
@@ -263,9 +264,18 @@ async function runQuery(
   const model = createModel(config.provider, config.modelName, secrets);
 
   const systemPrompt = buildSystemPrompt(input.agentId, input.isMain);
+  const routeInfo = getRouteInfo(input.chatJid);
+  const routeContext = routeInfo
+    ? `You are operating in the conversation "${routeInfo.jid}" with agent "${routeInfo.agentId}".`
+    : `You are operating in the conversation "${input.chatJid}" with agent "${input.agentId}".`;
   const messages: ModelMessage[] = [];
   if (systemPrompt) {
-    messages.push({ role: 'system', content: systemPrompt });
+    messages.push({
+      role: 'system',
+      content: `${routeContext}\n\n${systemPrompt}`,
+    });
+  } else {
+    messages.push({ role: 'system', content: routeContext });
   }
   const loadedMessages = loadMessages(input.chatJid, sessionId);
   messages.push(...loadedMessages);
@@ -339,9 +349,9 @@ async function runQuery(
       },
     });
 
+    // Consume the stream to drive completion
     for await (const chunk of result.textStream) {
       chunkCount++;
-      responseText += chunk;
       const now = Date.now();
       const timeSinceLastChunk = now - lastChunkTime;
       lastChunkTime = now;
@@ -353,7 +363,6 @@ async function runQuery(
             agent: input.agentId,
             sessionId,
             chunkCount,
-            responseLength: responseText.length,
             timeSinceLastChunk,
           },
           'Streaming in progress',
@@ -379,7 +388,6 @@ async function runQuery(
         agent: input.agentId,
         sessionId,
         chunkCount,
-        responseLength: responseText.length,
         streamDurationMs: streamDuration,
         usageTokens,
       },
@@ -395,8 +403,6 @@ async function runQuery(
         error: streamError.message,
         stack: streamError.stack,
         chunkCount,
-        responseLength: responseText.length,
-        streamDurationMs: streamDuration,
         model: config.modelName,
         provider: config.provider,
       },
@@ -405,11 +411,29 @@ async function runQuery(
     throw streamError;
   }
 
-  if (responseMessages.length === 0 && responseText) {
-    responseMessages = [{ role: 'assistant', content: responseText }];
-    logger.debug(
-      { agent: input.agentId, sessionId },
-      'Created response message from text stream (no onFinish messages)',
+  // Extract final assistant response from messages (more reliable, especially when tools are used)
+  if (responseMessages.length > 0) {
+    const lastAssistant = responseMessages
+      .filter((m) => m.role === 'assistant')
+      .pop();
+    if (lastAssistant) {
+      responseText = extractContentText(lastAssistant) || '';
+      logger.debug(
+        {
+          agent: input.agentId,
+          sessionId,
+          responseLength: responseText.length,
+        },
+        'Extracted response from messages',
+      );
+    }
+  }
+
+  // Fallback: if no assistant message in responseMessages but we have stream text
+  if (!responseText && chunkCount > 0) {
+    logger.warn(
+      { agent: input.agentId, sessionId, chunkCount },
+      'No assistant message in responseMessages, stream may have had text',
     );
   }
 
