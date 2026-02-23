@@ -282,6 +282,7 @@ function ensureSessionForJid(chatJid: string): void {
   const agent = resolveAgentForJid(chatJid);
   if (!agent) return;
   const sessionId = getOrCreateSessionId(chatJid, agent.id);
+  getSessionMessageCount(chatJid, sessionId);
   sessions[chatJid] = sessionId;
   setSession(chatJid, agent.id, sessionId);
 }
