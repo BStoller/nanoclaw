@@ -13,6 +13,7 @@ import {
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { logger } from '../logger.js';
+import { resolveAgentId } from '../router.js';
 import {
   Channel,
   OnChatMetadata,
@@ -236,13 +237,16 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
         chatName = senderName;
       }
 
+      const rawContent = content;
+      let isBotMentioned = false;
+
       // Translate Discord @bot mentions into TRIGGER_PATTERN format.
       // Discord mentions look like <@botUserId> — these won't match
       // TRIGGER_PATTERN (e.g., ^@Andy\b), so we prepend the trigger
       // when the bot is @mentioned.
       if (this.client?.user) {
         const botId = this.client.user.id;
-        const isBotMentioned =
+        isBotMentioned =
           message.mentions.users.has(botId) ||
           content.includes(`<@${botId}>`) ||
           content.includes(`<@!${botId}>`);
@@ -258,6 +262,19 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
           }
         }
       }
+
+      logger.info(
+        {
+          chatJid,
+          channelId,
+          sender: senderName,
+          isBotMentioned,
+          hasTrigger: TRIGGER_PATTERN.test(content),
+          messageId: msgId,
+          rawLength: rawContent.length,
+        },
+        'Discord message received',
+      );
 
       // Handle attachments — store placeholders so the agent knows something was sent
       if (message.attachments.size > 0) {
@@ -302,11 +319,11 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
       this.opts.onChatMetadata(chatJid, timestamp, chatName);
 
       // Only deliver full message for registered groups
-      const group = this.opts.registeredGroups()[chatJid];
-      if (!group) {
-        logger.debug(
+      const agentId = resolveAgentId(chatJid);
+      if (!agentId) {
+        logger.info(
           { chatJid, chatName },
-          'Message from unregistered Discord channel',
+          'Discord channel not routed; message ignored',
         );
         return;
       }
@@ -326,7 +343,7 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
       });
 
       logger.info(
-        { chatJid, chatName, sender: senderName },
+        { chatJid, chatName, sender: senderName, agentId },
         'Discord message stored',
       );
     });
