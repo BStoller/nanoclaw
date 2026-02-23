@@ -4,6 +4,11 @@ import {
   GatewayIntentBits,
   Message,
   TextChannel,
+  REST,
+  Routes,
+  SlashCommandBuilder,
+  ChatInputCommandInteraction,
+  Interaction,
 } from 'discord.js';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
@@ -19,7 +24,26 @@ export interface DiscordChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  executeCommand: (
+    chatJid: string,
+    command: 'clear' | 'status' | string,
+  ) => Promise<string>;
 }
+
+// Slash command definitions
+const CLEAR_COMMAND = new SlashCommandBuilder()
+  .setName('clear')
+  .setDescription('Clear the conversation session and start fresh');
+
+const STATUS_COMMAND = new SlashCommandBuilder()
+  .setName('status')
+  .setDescription('Show current agent status and session information');
+
+const CHATID_COMMAND = new SlashCommandBuilder()
+  .setName('chatid')
+  .setDescription('Get the Discord channel ID for routing configuration');
+
+const COMMANDS = [CLEAR_COMMAND, STATUS_COMMAND, CHATID_COMMAND];
 
 export class DiscordChannel implements Channel {
   name = 'discord';
@@ -81,6 +105,100 @@ export class DiscordChannel implements Channel {
       logger.debug({ jid, err }, 'Failed to clear acknowledgement reaction');
     } finally {
       this.processingMessages.delete(jid);
+    }
+  }
+
+  private async registerCommands(): Promise<void> {
+    if (!this.client?.user) {
+      logger.warn('Cannot register commands: client not ready');
+      return;
+    }
+
+    const rest = new REST({ version: '10' }).setToken(this.botToken);
+    const clientId = this.client.user.id;
+
+    try {
+      // Get all guilds the bot is in
+      const guilds = await this.client.guilds.fetch();
+
+      logger.info(
+        { guildCount: guilds.size },
+        'Registering slash commands for guilds',
+      );
+
+      for (const [guildId] of guilds) {
+        try {
+          await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
+            body: COMMANDS.map((cmd) => cmd.toJSON()),
+          });
+          logger.debug({ guildId }, 'Registered commands for guild');
+        } catch (err) {
+          logger.warn(
+            { guildId, err },
+            'Failed to register commands for guild',
+          );
+        }
+      }
+
+      logger.info('Slash commands registered successfully');
+    } catch (err) {
+      logger.error({ err }, 'Failed to register slash commands');
+    }
+  }
+
+  private async handleInteraction(interaction: Interaction): Promise<void> {
+    if (!interaction.isChatInputCommand()) return;
+
+    const chatJid = `dc:${interaction.channelId}`;
+    const commandName = interaction.commandName;
+
+    logger.info(
+      { command: commandName, chatJid, user: interaction.user.tag },
+      'Discord slash command received',
+    );
+
+    try {
+      if (commandName === 'chatid') {
+        await interaction.reply({
+          content: `This channel's ID is: \`${interaction.channelId}\`
+
+Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
+\`\`\`typescript
+'dc:${interaction.channelId}': 'main',
+\`\`\``,
+          ephemeral: true,
+        });
+        return;
+      }
+
+      // For clear and status, use the existing command execution logic
+      if (commandName === 'clear' || commandName === 'status') {
+        // Defer reply since command execution might take a moment
+        await interaction.deferReply({ ephemeral: true });
+
+        const response = await this.opts.executeCommand(chatJid, commandName);
+
+        await interaction.editReply({
+          content: response,
+        });
+        return;
+      }
+    } catch (err) {
+      logger.error(
+        { err, command: commandName },
+        'Error handling slash command',
+      );
+
+      if (interaction.replied || interaction.deferred) {
+        await interaction.editReply({
+          content: 'An error occurred while processing the command.',
+        });
+      } else {
+        await interaction.reply({
+          content: 'An error occurred while processing the command.',
+          ephemeral: true,
+        });
+      }
     }
   }
 
@@ -213,23 +331,33 @@ export class DiscordChannel implements Channel {
       );
     });
 
+    // Handle slash command interactions
+    this.client.on(Events.InteractionCreate, (interaction: Interaction) => {
+      this.handleInteraction(interaction);
+    });
+
     // Handle errors gracefully
     this.client.on(Events.Error, (err: Error) => {
       logger.error({ err: err.message }, 'Discord client error');
     });
 
     return new Promise<void>((resolve) => {
-      this.client!.once(Events.ClientReady, (readyClient: Client<true>) => {
-        logger.info(
-          { username: readyClient.user.tag, id: readyClient.user.id },
-          'Discord bot connected',
-        );
-        console.log(`\n  Discord bot: ${readyClient.user.tag}`);
-        console.log(
-          `  Use /chatid command or check channel IDs in Discord settings\n`,
-        );
-        resolve();
-      });
+      this.client!.once(
+        Events.ClientReady,
+        async (readyClient: Client<true>) => {
+          logger.info(
+            { username: readyClient.user.tag, id: readyClient.user.id },
+            'Discord bot connected',
+          );
+          console.log(`\n  Discord bot: ${readyClient.user.tag}`);
+          console.log(`  Slash commands will be registered automatically\n`);
+
+          // Register slash commands for all guilds
+          await this.registerCommands();
+
+          resolve();
+        },
+      );
 
       this.client!.login(this.botToken);
     });
