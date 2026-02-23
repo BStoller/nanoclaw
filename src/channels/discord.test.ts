@@ -18,6 +18,18 @@ vi.mock('../logger.js', () => ({
   },
 }));
 
+// Mock router
+vi.mock('../router.js', () => ({
+  resolveAgentId: vi.fn((chatJid: string) => {
+    // Simple mock: return 'test-server' for the test channel, null otherwise
+    if (chatJid === 'dc:1234567890123456') return 'test-server';
+    return null;
+  }),
+  ROUTES: {
+    'dc:1234567890123456': 'test-server',
+  },
+}));
+
 // --- discord.js mock ---
 
 type Handler = (...args: any[]) => any;

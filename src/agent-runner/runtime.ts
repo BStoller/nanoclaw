@@ -589,7 +589,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       prompt += '\n' + pending.join('\n');
     }
 
-    // Track the last response - only send the final one at the end
+    // Track the last response in case we need it on error
     let lastResponse: string | null = null;
     let hadError = false;
     let errorMessage = '';
@@ -610,9 +610,16 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         );
         sessionId = newSessionId;
 
-        // Store this response (will be overwritten if more piped messages arrive)
+        // Store this response and emit it immediately
         if (responseText) {
           lastResponse = responseText;
+          if (onOutput) {
+            await onOutput({
+              status: 'success',
+              result: responseText,
+              newSessionId: sessionId,
+            });
+          }
         }
 
         void maybeCompactSession(input, sessionId, usageTokens, secrets);
@@ -628,14 +635,8 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
         prompt = nextMessage;
       }
 
-      // Send only the final response once at the end
+      // Send completion marker
       if (onOutput) {
-        await onOutput({
-          status: 'success',
-          result: lastResponse,
-          newSessionId: sessionId,
-        });
-        // Send completion marker
         await onOutput({
           status: 'success',
           result: null,
