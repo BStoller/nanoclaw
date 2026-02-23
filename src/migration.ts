@@ -3,7 +3,6 @@ import path from 'path';
 import Database from 'better-sqlite3';
 import { AGENTS_DIR, SESSIONS_DIR, STORE_DIR } from './config.js';
 import { logger } from './logger.js';
-import { addRoute } from './router.js';
 import {
   getRouterState,
   setRouterState,
@@ -18,7 +17,7 @@ import {
  * 1. Queries old registered_groups table to get JID -> folder mappings
  * 2. Renames groups/ to agents/
  * 3. Moves agents/{folder}/.nanoclaw/* to sessions/{jid}/*
- * 4. Adds routes to ROUTES map
+ * 4. Adds routes to the database
  * 5. Migrates legacy sessions from router_state
  */
 export async function runMigration(): Promise<void> {
@@ -202,8 +201,7 @@ export async function runMigration(): Promise<void> {
           setSession(jid, folderName, sessionId);
         }
 
-        // Add to routes (both in-memory and DB)
-        addRoute(jid, folderName);
+        // Add to routes (DB)
         setRoute(jid, folderName);
         routesToAdd.push({ jid, agentId: folderName });
         logger.info({ folder: folderName, jid }, 'Migrated session');
@@ -298,7 +296,7 @@ export async function runMigration(): Promise<void> {
         `${placeholderCount} placeholder route(s) need manual JID updates.`,
       );
       logger.info(
-        'Update src/router.ts to replace legacy: routes with actual JIDs:',
+        'Add routes with add_route to replace legacy: routes with actual JIDs:',
       );
       logger.info('  - Discord: dc:{channelId}');
       logger.info('  - WhatsApp groups: {groupId}@g.us');
