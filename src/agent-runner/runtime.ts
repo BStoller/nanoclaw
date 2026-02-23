@@ -23,6 +23,7 @@ import {
   replaceSessionMessages,
   saveMessage,
 } from './session-store.js';
+import { getRouteInfo } from '../router.js';
 
 const DEFAULT_MODEL_PROVIDER = 'opencode-zen';
 const DEFAULT_MODEL_NAME = 'kimi-k2.5';
@@ -154,9 +155,18 @@ async function runQuery(
   const model = createModel(config.provider, config.modelName, secrets);
 
   const systemPrompt = buildSystemPrompt(input.agentId, input.isMain);
+  const routeInfo = getRouteInfo(input.chatJid);
+  const routeContext = routeInfo
+    ? `You are operating in the conversation "${routeInfo.jid}" with agent "${routeInfo.agentId}".`
+    : `You are operating in the conversation "${input.chatJid}" with agent "${input.agentId}".`;
   const messages: ModelMessage[] = [];
   if (systemPrompt) {
-    messages.push({ role: 'system', content: systemPrompt });
+    messages.push({
+      role: 'system',
+      content: `${routeContext}\n\n${systemPrompt}`,
+    });
+  } else {
+    messages.push({ role: 'system', content: routeContext });
   }
   messages.push(...loadMessages(input.chatJid, sessionId));
   messages.push({ role: 'user', content: prompt });
