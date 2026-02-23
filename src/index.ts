@@ -41,9 +41,8 @@ import {
   formatMessages,
   formatOutbound,
   resolveAgentId,
-  ROUTES,
-  addRoute,
   loadRoutesFromDb,
+  getRouteJids,
 } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Agent, Channel, NewMessage } from './types.js';
@@ -112,7 +111,7 @@ function loadState(): void {
   sessions = {};
   for (const [jid, data] of Object.entries(sessionData)) {
     sessions[jid] = data.sessionId;
-    // Note: agentId is stored in DB but we resolve it from ROUTES at runtime
+    // Note: agentId is stored in DB but we resolve it from routes at runtime
     // This ensures session state persists across restarts
   }
 
@@ -246,8 +245,8 @@ export function _setRegisteredGroups(newAgents: Record<string, Agent>): void {
  */
 export function getAvailableGroups(): AvailableGroup[] {
   const chats = getAllChats();
-  // A JID is "registered" if it has a route in ROUTES
-  const registeredJids = new Set(Object.keys(ROUTES));
+  // A JID is "registered" if it has a route in the DB cache
+  const registeredJids = new Set(getRouteJids());
 
   return chats
     .filter((c) => c.jid !== '__group_sync__' && c.is_group)
@@ -265,7 +264,7 @@ export function _setAgents(newAgents: Record<string, Agent>): void {
 }
 
 /**
- * Resolve agent for a JID using the hardcoded ROUTES map.
+ * Resolve agent for a JID using the DB-backed route cache.
  */
 function resolveAgentForJid(jid: string): Agent | null {
   const agentId = resolveAgentId(jid);
@@ -445,7 +444,7 @@ async function runAgentInput(
     ? async (output: AgentOutput) => {
         if (output.newSessionId) {
           sessions[input.chatJid] = output.newSessionId;
-          // Get agent ID from ROUTES
+          // Get agent ID from routes
           const agentId = resolveAgentId(input.chatJid);
           if (agentId) {
             setSession(input.chatJid, agentId, output.newSessionId);
@@ -475,11 +474,11 @@ async function startMessageLoop(): Promise<void> {
 
   logger.info(`NanoClaw running (trigger: @${ASSISTANT_NAME})`);
 
-  // Get all JIDs that have routes
-  const routedJids = Object.keys(ROUTES);
-
   while (true) {
     try {
+      // Get all JIDs that have routes
+      const routedJids = getRouteJids();
+
       const { messages, newTimestamp } = getNewMessages(
         routedJids,
         lastTimestamp,
@@ -584,7 +583,7 @@ async function startMessageLoop(): Promise<void> {
  * Handles crash between advancing lastTimestamp and processing messages.
  */
 function recoverPendingMessages(): void {
-  for (const chatJid of Object.keys(ROUTES)) {
+  for (const chatJid of getRouteJids()) {
     const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
     const pending = getMessagesSince(chatJid, sinceTimestamp, ASSISTANT_NAME);
     if (pending.length > 0) {

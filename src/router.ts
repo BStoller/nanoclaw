@@ -2,21 +2,6 @@ import path from 'path';
 import { AGENTS_DIR, SESSIONS_DIR } from './config.js';
 import { Channel, NewMessage } from './types.js';
 
-/**
- * Hardcoded routing map: JID -> Agent ID
- * Add your Discord channels and WhatsApp groups here.
- * These take precedence over database routes.
- */
-export const ROUTES: Record<string, string> = {
-  // Discord channels - add your channel IDs here
-  // Format: 'dc:{channelId}': '{agent-id}'
-  // Example: 'dc:1234567890123456': 'main',
-  // WhatsApp groups
-  // Format: '{groupId}@g.us': '{agent-id}'
-  // WhatsApp DMs
-  // Format: '{phone}@s.whatsapp.net': '{agent-id}'
-};
-
 // Database-backed routes (populated from DB on startup)
 let dbRoutes: Record<string, string> = {};
 
@@ -30,16 +15,33 @@ export function loadRoutesFromDb(routes: Record<string, string>): void {
 
 /**
  * Resolve an agent ID from a JID.
- * Checks hardcoded ROUTES first, then falls back to database routes.
  * Returns null if no route is defined for this JID.
  */
 export function resolveAgentId(jid: string): string | null {
-  // Hardcoded routes take precedence
-  if (ROUTES[jid]) {
-    return ROUTES[jid];
-  }
-  // Fall back to database routes
   return dbRoutes[jid] || null;
+}
+
+/**
+ * Get all routed JIDs (in-memory cache loaded from DB).
+ */
+export function getRouteJids(): string[] {
+  return Object.keys(dbRoutes);
+}
+
+/**
+ * Update the in-memory route cache.
+ * Note: This only updates memory. To persist, use setRoute() from db.ts.
+ */
+export function setRouteInMemory(jid: string, agentId: string): void {
+  dbRoutes[jid] = agentId;
+}
+
+/**
+ * Remove a route from the in-memory cache.
+ * Note: This only updates memory. To persist, use deleteRoute() from db.ts.
+ */
+export function deleteRouteInMemory(jid: string): void {
+  delete dbRoutes[jid];
 }
 
 /**
@@ -56,14 +58,6 @@ export function getSessionPath(jid: string): string {
   // Sanitize JID for filesystem (replace colons and other special chars)
   const sanitizedJid = jid.replace(/[:@]/g, '_');
   return path.join(SESSIONS_DIR, sanitizedJid);
-}
-
-/**
- * Add a route to the in-memory ROUTES map.
- * Note: This only adds to memory. To persist, use setRoute() from db.ts.
- */
-export function addRoute(jid: string, agentId: string): void {
-  ROUTES[jid] = agentId;
 }
 
 export function escapeXml(s: string): string {

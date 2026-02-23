@@ -12,7 +12,7 @@ import {
   setRoute,
 } from '../../db.js';
 import { Agent } from '../../types.js';
-import { resolveAgentId, addRoute, ROUTES } from '../../router.js';
+import { resolveAgentId, setRouteInMemory } from '../../router.js';
 
 export interface NanoClawContext {
   chatJid: string;
@@ -81,7 +81,7 @@ function scheduleTask(
   if (!targetAgentId) {
     return {
       ok: false,
-      message: `Cannot schedule task: target JID not routed (${targetJid}). Add a route in src/router.ts first.`,
+      message: `Cannot schedule task: target JID not routed (${targetJid}). Add a route via add_route first.`,
     };
   }
 
@@ -261,7 +261,7 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
         deps.registerAgent(input.id, agent);
         return {
           ok: true,
-          message: `Agent "${input.name}" registered. Add a route in src/router.ts to connect JIDs to this agent.`,
+          message: `Agent "${input.name}" registered. Add a route via add_route to connect JIDs to this agent.`,
         };
       },
     }),
@@ -286,7 +286,7 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
         }
 
         // Add route in-memory and persist to database
-        addRoute(input.jid, input.agent_id);
+        setRouteInMemory(input.jid, input.agent_id);
         setRoute(input.jid, input.agent_id);
         return {
           ok: true,
