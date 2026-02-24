@@ -553,11 +553,27 @@ async function runQuery(
                 typeof part.output === 'string'
                   ? JSON.parse(part.output)
                   : part.output;
-              if (result && result.success && result.filePath) {
+              // Handle wrapped output from Vercel AI SDK
+              const actualResult =
+                result?.type === 'json' && result?.value
+                  ? result.value
+                  : result;
+              if (
+                actualResult &&
+                actualResult.success &&
+                actualResult.filePath
+              ) {
                 pendingImageAttachments.push({
-                  filePath: result.filePath,
-                  caption: result.caption || '',
+                  filePath: actualResult.filePath,
+                  caption: actualResult.caption || '',
                 });
+                logger.debug(
+                  {
+                    filePath: actualResult.filePath,
+                    caption: actualResult.caption,
+                  },
+                  'Extracted image attachment from tool result',
+                );
               }
             } catch {
               // Not JSON or invalid format, skip
