@@ -4,6 +4,8 @@ import { createSQLiteState } from './chat-sdk-state-sqlite.js';
 import {
   ASSISTANT_NAME,
   DISCORD_BOT_TOKEN,
+  DISCORD_PUBLIC_KEY,
+  DISCORD_APPLICATION_ID,
   DATA_DIR,
   TRIGGER_PATTERN,
 } from './config.js';
@@ -356,20 +358,47 @@ export async function createChatSdkBot(): Promise<Chat> {
   const state = createSQLiteState(path.join(DATA_DIR, 'nanoclaw.db'));
   await state.connect();
 
-  // Create Discord adapter
-  const discordAdapter = createDiscordAdapter({
-    botToken: DISCORD_BOT_TOKEN,
-    // These would need to be configured - for now we'll log that they're needed
-    publicKey: process.env.DISCORD_PUBLIC_KEY || '',
-    applicationId: process.env.DISCORD_APPLICATION_ID || '',
-  });
+  // Build adapters object based on available credentials
+  const adapters: Record<string, any> = {};
+
+  // Discord adapter (if token configured)
+  if (DISCORD_BOT_TOKEN) {
+    adapters.discord = createDiscordAdapter({
+      botToken: DISCORD_BOT_TOKEN,
+      publicKey: DISCORD_PUBLIC_KEY,
+      applicationId: DISCORD_APPLICATION_ID,
+    });
+    logger.info('Discord adapter initialized');
+  } else {
+    logger.warn('DISCORD_BOT_TOKEN not set - Discord adapter disabled');
+  }
+
+  // NOTE: Add other adapters here when you install their packages:
+  // if (SLACK_BOT_TOKEN) {
+  //   adapters.slack = createSlackAdapter({
+  //     botToken: SLACK_BOT_TOKEN,
+  //     signingSecret: SLACK_SIGNING_SECRET,
+  //   });
+  // }
+  //
+  // if (TEAMS_APP_ID) {
+  //   adapters.teams = createTeamsAdapter({
+  //     appId: TEAMS_APP_ID,
+  //     appPassword: TEAMS_APP_PASSWORD,
+  //     tenantId: TEAMS_APP_TENANT_ID,
+  //   });
+  // }
+
+  if (Object.keys(adapters).length === 0) {
+    throw new Error(
+      'No chat adapters configured. Please set at least one platform token (e.g., DISCORD_BOT_TOKEN)',
+    );
+  }
 
   // Create Chat SDK bot
   const bot = new Chat({
     userName: ASSISTANT_NAME.toLowerCase(),
-    adapters: {
-      discord: discordAdapter,
-    },
+    adapters,
     state,
     // logger: 'info', // Use default ConsoleLogger
   });
@@ -535,47 +564,56 @@ export async function createChatSdkBot(): Promise<Chat> {
 }
 
 /**
- * Send a message to a specific JID (used by scheduler and other modules)
- * This opens a DM or finds the channel to send the message
+ * Send a message to a specific thread ID (used by scheduler and other modules)
+ * Automatically detects platform from thread ID format (e.g., discord:..., slack:...)
  */
 export async function sendMessageToJid(
-  jid: string,
+  threadId: string,
   text: string,
 ): Promise<void> {
   if (!botInstance) {
-    logger.error({ jid }, 'Cannot send message - bot not initialized');
+    logger.error({ threadId }, 'Cannot send message - bot not initialized');
     throw new Error('Bot not initialized');
   }
 
-  const threadId = jidToThreadId(jid);
-
   try {
-    // Try to get the Discord adapter and send via DM or channel
-    const discordAdapter = botInstance.getAdapter('discord');
-    if (!discordAdapter) {
-      logger.error({ jid }, 'Discord adapter not available');
-      throw new Error('Discord adapter not available');
+    // Parse platform from thread ID: discord:... or slack:... or teams:...
+    const [platform] = threadId.split(':');
+
+    if (!platform) {
+      logger.error(
+        { threadId },
+        'Invalid thread ID format - no platform prefix',
+      );
+      throw new Error('Invalid thread ID format');
     }
 
-    // For Discord, we can try to open a DM or post to a channel
-    // The threadId format is: discord:{channelId}:{threadId} or just channelId
-    // We need to parse it properly
+    // Get the appropriate adapter
+    const adapter = botInstance.getAdapter(platform);
+    if (!adapter) {
+      logger.error({ threadId, platform }, 'No adapter available for platform');
+      throw new Error(`No adapter for platform: ${platform}`);
+    }
 
-    // Simple approach: post directly via the adapter's API
-    // This requires the adapter to have a method to post to a specific channel
-    const adapter = discordAdapter as any;
-
-    if (adapter.postMessage) {
-      await adapter.postMessage(threadId, text);
-      logger.info({ jid, text: text.slice(0, 50) }, 'Sent message via adapter');
+    // Post message using adapter's API
+    const adapterAny = adapter as any;
+    if (adapterAny.postMessage) {
+      await adapterAny.postMessage(threadId, text);
+      logger.info(
+        { threadId, platform, text: text.slice(0, 50) },
+        'Sent message via adapter',
+      );
     } else {
-      logger.error({ jid }, 'Adapter does not support postMessage');
+      logger.error(
+        { threadId, platform },
+        'Adapter does not support postMessage',
+      );
       throw new Error('Adapter method not available');
     }
   } catch (err) {
     logger.error(
-      { jid, err, text: text.slice(0, 50) },
-      'Failed to send message to JID',
+      { threadId, err, text: text.slice(0, 50) },
+      'Failed to send message to thread',
     );
     throw err;
   }

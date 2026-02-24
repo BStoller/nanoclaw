@@ -30,31 +30,101 @@ function patternSpecificity(pattern: string): number {
 }
 
 /**
- * Resolve an agent ID from a JID or thread ID.
- * Returns null if no route is defined for this ID.
- * Supports wildcard patterns using * (e.g., "whatsapp:*", "dc:*", "discord:*", "*").
- *
- * Handles both legacy formats (dc:123) and Chat SDK formats (discord:guildId:channelId).
+ * Parse a thread ID to extract platform and normalize for routing
+ * Supports: discord:..., slack:..., teams:..., gchat:..., legacy dc:...
  */
-export function resolveAgentId(jid: string): string | null {
-  // Fast path: exact match
-  if (dbRoutes[jid]) return dbRoutes[jid];
+export function parseThreadId(threadId: string): {
+  platform: string;
+  normalizedId: string;
+  channelId: string;
+} | null {
+  const parts = threadId.split(':');
+  if (parts.length < 2) return null;
 
-  // Handle Chat SDK thread ID format: discord:guildId:channelId or discord:guildId:channelId:threadId
-  // Convert to legacy dc: format for route matching
-  let legacyJid = jid;
-  if (jid.startsWith('discord:')) {
-    const parts = jid.split(':');
-    if (parts.length >= 3) {
-      // Extract channel ID (3rd part)
-      const channelId = parts[2];
-      legacyJid = `dc:${channelId}`;
-    }
+  const platform = parts[0];
+
+  // Handle different platform formats
+  switch (platform) {
+    case 'discord':
+      // Format: discord:guildId:channelId or discord:guildId:channelId:threadId
+      if (parts.length >= 3) {
+        return {
+          platform,
+          normalizedId: threadId,
+          channelId: parts[2],
+        };
+      }
+      break;
+
+    case 'slack':
+      // Format: slack:teamId:channelId or slack:channelId
+      if (parts.length >= 2) {
+        return {
+          platform,
+          normalizedId: threadId,
+          channelId: parts[parts.length - 1],
+        };
+      }
+      break;
+
+    case 'teams':
+      // Format: teams:tenantId:channelId
+      if (parts.length >= 3) {
+        return {
+          platform,
+          normalizedId: threadId,
+          channelId: parts[2],
+        };
+      }
+      break;
+
+    case 'gchat':
+      // Format: gchat:spaceId:threadId
+      if (parts.length >= 2) {
+        return {
+          platform,
+          normalizedId: threadId,
+          channelId: parts[1],
+        };
+      }
+      break;
+
+    case 'dc':
+      // Legacy Discord format: dc:channelId
+      return {
+        platform: 'discord',
+        normalizedId: `discord::${parts[1]}`,
+        channelId: parts[1],
+      };
   }
 
-  // Check if legacy format has a route
-  if (legacyJid !== jid && dbRoutes[legacyJid]) {
-    return dbRoutes[legacyJid];
+  return null;
+}
+
+/**
+ * Resolve an agent ID from a thread ID.
+ * Returns null if no route is defined for this ID.
+ * Supports wildcard patterns using * (e.g., "discord:*", "slack:*", "*").
+ *
+ * Handles all Chat SDK formats and legacy formats.
+ */
+export function resolveAgentId(threadId: string): string | null {
+  // Fast path: exact match
+  if (dbRoutes[threadId]) return dbRoutes[threadId];
+
+  // Parse the thread ID
+  const parsed = parseThreadId(threadId);
+  if (!parsed) return null;
+
+  // Try matching against various formats
+  const formatsToTry = [
+    threadId, // Full format: discord:guild:channel
+    `${parsed.platform}:${parsed.channelId}`, // Short format: discord:channel
+    `dc:${parsed.channelId}`, // Legacy format: dc:channel
+  ];
+
+  for (const format of formatsToTry) {
+    if (dbRoutes[format]) return dbRoutes[format];
   }
 
   // Check wildcard patterns (sorted by specificity descending)
@@ -63,12 +133,11 @@ export function resolveAgentId(jid: string): string | null {
     .sort((a, b) => patternSpecificity(b) - patternSpecificity(a));
 
   for (const pattern of patterns) {
-    if (globToRegex(pattern).test(jid)) {
-      return dbRoutes[pattern];
-    }
-    // Also check against legacy format
-    if (legacyJid !== jid && globToRegex(pattern).test(legacyJid)) {
-      return dbRoutes[pattern];
+    // Try matching against all formats
+    for (const format of formatsToTry) {
+      if (globToRegex(pattern).test(format)) {
+        return dbRoutes[pattern];
+      }
     }
   }
 
@@ -99,15 +168,24 @@ export function deleteRouteInMemory(jid: string): void {
 }
 
 /**
- * Get route information for a JID.
- * Returns the agent ID and JID for context.
+ * Get route information for a thread ID.
+ * Returns the agent ID and thread ID for context.
  */
 export function getRouteInfo(
-  jid: string,
-): { jid: string; agentId: string } | null {
-  const agentId = resolveAgentId(jid);
+  threadId: string,
+): { threadId: string; agentId: string } | null {
+  const agentId = resolveAgentId(threadId);
   if (!agentId) return null;
-  return { jid, agentId };
+  return { threadId, agentId };
+}
+
+/**
+ * Get the platform from a thread ID
+ * e.g., "discord:123:456" -> "discord"
+ */
+export function getPlatformFromThreadId(threadId: string): string | null {
+  const parsed = parseThreadId(threadId);
+  return parsed?.platform || null;
 }
 
 /**
@@ -119,11 +197,12 @@ export function getAgentPath(agentId: string): string {
 
 /**
  * Get the filesystem path for a session's folder.
+ * Uses thread ID to create a unique path.
  */
-export function getSessionPath(jid: string): string {
-  // Sanitize JID for filesystem (replace colons and other special chars)
-  const sanitizedJid = jid.replace(/[:@]/g, '_');
-  return path.join(SESSIONS_DIR, sanitizedJid);
+export function getSessionPath(threadId: string): string {
+  // Sanitize thread ID for filesystem (replace colons and other special chars)
+  const sanitizedId = threadId.replace(/[:@]/g, '_');
+  return path.join(SESSIONS_DIR, sanitizedId);
 }
 
 export function escapeXml(s: string): string {

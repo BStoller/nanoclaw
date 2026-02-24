@@ -277,7 +277,7 @@ async function runQuery(
   const systemPrompt = buildSystemPrompt(input.agentId, input.isMain);
   const routeInfo = getRouteInfo(input.chatJid);
   const routeContext = routeInfo
-    ? `You are operating in the conversation "${routeInfo.jid}" with agent "${routeInfo.agentId}".`
+    ? `You are operating in the conversation "${routeInfo.threadId}" with agent "${routeInfo.agentId}".`
     : `You are operating in the conversation "${input.chatJid}" with agent "${input.agentId}".`;
   const messages: ModelMessage[] = [];
   if (systemPrompt) {
