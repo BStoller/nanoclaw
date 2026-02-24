@@ -478,13 +478,15 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
       const textChannel = channel as TextChannel;
 
       // Prepare file attachments if provided - read as buffers to handle container/context issues
-      const fileAttachments = attachments?.map((filePath) => {
-        const fileBuffer = fs.readFileSync(filePath);
-        return {
-          attachment: fileBuffer,
-          name: path.basename(filePath),
-        };
-      });
+      const fileAttachments = await Promise.all(
+        (attachments || []).map(async (filePath) => {
+          const fileBuffer = await fs.promises.readFile(filePath);
+          return {
+            attachment: fileBuffer,
+            name: path.basename(filePath),
+          };
+        })
+      );
 
       // Discord has a 2000 character limit per message
       const MAX_LENGTH = 2000;
