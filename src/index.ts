@@ -138,7 +138,7 @@ function saveState(): void {
   );
 }
 
-type CommandType = 'clear' | 'status';
+type CommandType = 'clear' | 'status' | 'update';
 
 function parseCommand(text: string): CommandType | null {
   const trimmed = text.trim();
@@ -146,6 +146,7 @@ function parseCommand(text: string): CommandType | null {
   const normalized = trimmed.toLowerCase();
   if (normalized === '/clear') return 'clear';
   if (normalized === '/status') return 'status';
+  if (normalized === '/update') return 'update';
   return null;
 }
 
@@ -199,6 +200,24 @@ export async function executeCommand(
     const tokenCount = getSessionTokenCount(chatJid, sessionId);
     const lastTs = getSessionLastTimestamp(chatJid, sessionId) || 'none';
     return `Status: agent=${agent.id} session=${sessionId} model=${modelProvider}/${modelName} messages=${messageCount} tokens=${tokenCount} last=${lastTs}`;
+  } else if (command === 'update') {
+    // Write pending update state file
+    const pendingPath = path.join(DATA_DIR, 'update-pending.json');
+    fs.writeFileSync(
+      pendingPath,
+      JSON.stringify({ chatJid, timestamp: new Date().toISOString() }, null, 2),
+    );
+
+    // Spawn detached process to run npm update
+    const { spawn } = await import('child_process');
+    const child = spawn('npm', ['run', 'update'], {
+      detached: true,
+      stdio: 'ignore',
+      cwd: process.cwd(),
+    });
+    child.unref();
+
+    return 'Update in progress... The bot will restart shortly.';
   }
 
   return 'Unknown command.';
@@ -962,6 +981,32 @@ async function main(): Promise<void> {
   queue.setProcessMessagesFn(processJidMessages);
   recoverPendingMessages();
   startMessageLoop();
+
+  // Check for pending update completion
+  const pendingUpdatePath = path.join(DATA_DIR, 'update-pending.json');
+  if (fs.existsSync(pendingUpdatePath)) {
+    try {
+      const pending = JSON.parse(fs.readFileSync(pendingUpdatePath, 'utf8'));
+      const channel = findChannel(channels, pending.chatJid);
+      if (channel) {
+        await channel.sendMessage(
+          pending.chatJid,
+          '✅ Update finished and bot restarted successfully.',
+        );
+        logger.info(
+          { chatJid: pending.chatJid },
+          'Sent update completion message',
+        );
+      }
+      fs.unlinkSync(pendingUpdatePath);
+    } catch (err) {
+      logger.error({ err }, 'Failed to handle pending update notification');
+      // Clean up the file even on error
+      try {
+        fs.unlinkSync(pendingUpdatePath);
+      } catch {}
+    }
+  }
 }
 
 // Guard: only run when executed directly, not when imported by tests
