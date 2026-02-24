@@ -10,6 +10,7 @@ import {
   ChatInputCommandInteraction,
   Interaction,
 } from 'discord.js';
+import fs from 'fs';
 import path from 'path';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
@@ -521,11 +522,14 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
 
       const textChannel = channel as TextChannel;
 
-      // Prepare file attachments
-      const attachments = filePaths.map((filePath) => ({
-        attachment: filePath,
-        name: path.basename(filePath),
-      }));
+      // Prepare file attachments - read as buffers to handle container/context issues
+      const attachments = filePaths.map((filePath) => {
+        const fileBuffer = fs.readFileSync(filePath);
+        return {
+          attachment: fileBuffer,
+          name: path.basename(filePath),
+        };
+      });
 
       // Send message with attachments
       // Discord has a 2000 character limit for text with files too
