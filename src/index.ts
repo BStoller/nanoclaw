@@ -533,39 +533,29 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
 
       for (const imageAttachment of result.pendingImageAttachments) {
         try {
-          // Check if channel supports file attachments
-          if (channel.sendMessageWithAttachments) {
-            await channel.sendMessageWithAttachments(
+          await channel.sendMessage(chatJid, imageAttachment.caption, [
+            imageAttachment.filePath,
+          ]);
+
+          // Store outgoing attachment metadata
+          const attachment: Attachment = {
+            id: crypto.randomUUID(),
+            filename: path.basename(imageAttachment.filePath),
+            path: imageAttachment.filePath,
+            mimeType: getMimeTypeFromExtension(imageAttachment.filePath),
+            size: fs.statSync(imageAttachment.filePath).size,
+            createdAt: new Date().toISOString(),
+          };
+          storeAttachment(attachment, `outgoing-${Date.now()}`, chatJid);
+
+          logger.debug(
+            {
+              agent: agent.name,
               chatJid,
-              imageAttachment.caption,
-              [imageAttachment.filePath],
-            );
-
-            // Store outgoing attachment metadata
-            const attachment: Attachment = {
-              id: crypto.randomUUID(),
-              filename: path.basename(imageAttachment.filePath),
-              path: imageAttachment.filePath,
-              mimeType: getMimeTypeFromExtension(imageAttachment.filePath),
-              size: fs.statSync(imageAttachment.filePath).size,
-              createdAt: new Date().toISOString(),
-            };
-            storeAttachment(attachment, `outgoing-${Date.now()}`, chatJid);
-
-            logger.debug(
-              {
-                agent: agent.name,
-                chatJid,
-                filePath: imageAttachment.filePath,
-              },
-              'Image attachment sent',
-            );
-          } else {
-            logger.warn(
-              { agent: agent.name, chatJid, channel: channel.name },
-              'Channel does not support file attachments',
-            );
-          }
+              filePath: imageAttachment.filePath,
+            },
+            'Image attachment sent',
+          );
         } catch (sendErr) {
           logger.error(
             {

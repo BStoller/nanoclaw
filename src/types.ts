@@ -63,12 +63,7 @@ export interface TaskRunLog {
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string): Promise<void>;
-  sendMessageWithAttachments?(
-    jid: string,
-    text: string,
-    filePaths: string[],
-  ): Promise<void>;
+  sendMessage(jid: string, text: string, attachments?: string[]): Promise<void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;

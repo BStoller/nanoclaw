@@ -28,7 +28,11 @@ export interface SchedulerDependencies {
     input: AgentInput,
     onOutput?: (output: AgentOutput) => Promise<void>,
   ) => Promise<AgentOutput>;
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (
+    jid: string,
+    text: string,
+    attachments?: string[],
+  ) => Promise<void>;
 }
 
 async function runTask(

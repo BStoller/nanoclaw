@@ -453,55 +453,10 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
     });
   }
 
-  async sendMessage(jid: string, text: string): Promise<void> {
-    if (!this.client) {
-      logger.warn('Discord client not initialized');
-      return;
-    }
-
-    // Clear acknowledgement reaction before sending response
-    await this.clearAcknowledgement(jid);
-
-    try {
-      const channelId = jid.replace(/^dc:/, '');
-      const channel = await this.client.channels.fetch(channelId);
-
-      if (!channel || !('send' in channel)) {
-        logger.warn({ jid }, 'Discord channel not found or not text-based');
-        return;
-      }
-
-      const textChannel = channel as TextChannel;
-
-      // Discord has a 2000 character limit per message — split if needed
-      const MAX_LENGTH = 2000;
-      if (text.length <= MAX_LENGTH) {
-        await textChannel.send(text);
-      } else {
-        for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await textChannel.send(text.slice(i, i + MAX_LENGTH));
-        }
-      }
-      logger.info({ jid, length: text.length }, 'Discord message sent');
-    } catch (err) {
-      logger.error(
-        {
-          jid,
-          error: err instanceof Error ? err.message : String(err),
-          errorStack: err instanceof Error ? err.stack : undefined,
-          errorCode: (err as any)?.code,
-          errorStatus: (err as any)?.status,
-          textLength: text.length,
-        },
-        'Failed to send Discord message',
-      );
-    }
-  }
-
-  async sendMessageWithAttachments(
+  async sendMessage(
     jid: string,
     text: string,
-    filePaths: string[],
+    attachments?: string[],
   ): Promise<void> {
     if (!this.client) {
       logger.warn('Discord client not initialized');
@@ -522,8 +477,8 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
 
       const textChannel = channel as TextChannel;
 
-      // Prepare file attachments - read as buffers to handle container/context issues
-      const attachments = filePaths.map((filePath) => {
+      // Prepare file attachments if provided - read as buffers to handle container/context issues
+      const fileAttachments = attachments?.map((filePath) => {
         const fileBuffer = fs.readFileSync(filePath);
         return {
           attachment: fileBuffer,
@@ -531,28 +486,41 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
         };
       });
 
-      // Send message with attachments
-      // Discord has a 2000 character limit for text with files too
+      // Discord has a 2000 character limit per message
       const MAX_LENGTH = 2000;
-      const content =
-        text.length <= MAX_LENGTH ? text : text.slice(0, MAX_LENGTH);
 
-      await textChannel.send({
-        content: content || undefined,
-        files: attachments,
-      });
+      if (fileAttachments && fileAttachments.length > 0) {
+        // Send with attachments
+        const content =
+          text.length <= MAX_LENGTH ? text : text.slice(0, MAX_LENGTH);
 
-      // If text was truncated, send remaining text as follow-up
-      if (text.length > MAX_LENGTH) {
-        for (let i = MAX_LENGTH; i < text.length; i += MAX_LENGTH) {
-          await textChannel.send(text.slice(i, i + MAX_LENGTH));
+        await textChannel.send({
+          content: content || undefined,
+          files: fileAttachments,
+        });
+
+        // If text was truncated, send remaining text as follow-up
+        if (text.length > MAX_LENGTH) {
+          for (let i = MAX_LENGTH; i < text.length; i += MAX_LENGTH) {
+            await textChannel.send(text.slice(i, i + MAX_LENGTH));
+          }
         }
-      }
 
-      logger.info(
-        { jid, fileCount: filePaths.length, textLength: text.length },
-        'Discord message with attachments sent',
-      );
+        logger.info(
+          { jid, fileCount: fileAttachments.length, textLength: text.length },
+          'Discord message with attachments sent',
+        );
+      } else {
+        // Send text only
+        if (text.length <= MAX_LENGTH) {
+          await textChannel.send(text);
+        } else {
+          for (let i = 0; i < text.length; i += MAX_LENGTH) {
+            await textChannel.send(text.slice(i, i + MAX_LENGTH));
+          }
+        }
+        logger.info({ jid, length: text.length }, 'Discord message sent');
+      }
     } catch (err) {
       logger.error(
         {
@@ -561,10 +529,10 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
           errorStack: err instanceof Error ? err.stack : undefined,
           errorCode: (err as any)?.code,
           errorStatus: (err as any)?.status,
-          fileCount: filePaths.length,
-          filePaths,
+          textLength: text.length,
+          fileCount: attachments?.length,
         },
-        'Failed to send Discord message with attachments',
+        'Failed to send Discord message',
       );
     }
   }
