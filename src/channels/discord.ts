@@ -30,7 +30,8 @@ export interface DiscordChannelOpts {
   registeredGroups: () => Record<string, RegisteredGroup>;
   executeCommand: (
     chatJid: string,
-    command: 'clear' | 'status' | string,
+    command: 'clear' | 'status' | 'update' | string,
+    sender?: string,
   ) => Promise<string>;
 }
 
@@ -197,7 +198,12 @@ Add this to your \\\`ROUTES\\\` in \\\`src/router.ts\\\`:
         // Defer reply since command execution might take a moment
         await interaction.deferReply({ ephemeral: true });
 
-        const response = await this.opts.executeCommand(chatJid, commandName);
+        const senderId = `discord:${interaction.user.id}`;
+        const response = await this.opts.executeCommand(
+          chatJid,
+          commandName,
+          senderId,
+        );
 
         await interaction.editReply({
           content: response,
