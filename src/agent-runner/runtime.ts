@@ -1150,6 +1150,15 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
 
         // Accumulate image attachments from this query iteration
         if (queryAttachments && queryAttachments.length > 0) {
+          logger.debug(
+            {
+              runId,
+              agent: input.agentId,
+              attachmentCount: queryAttachments.length,
+              attachments: queryAttachments.map((a) => a.filePath),
+            },
+            'Accumulating image attachments from query',
+          );
           pendingImageAttachments.push(...queryAttachments);
         }
 
@@ -1176,6 +1185,7 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
                 runId,
                 agent: input.agentId,
                 responseLength: responseText.length,
+                attachmentCount: pendingImageAttachments.length,
               },
               'Calling onOutput callback with response',
             );

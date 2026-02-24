@@ -471,6 +471,13 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
   );
 
   const output = await runAgent(agent, prompt, chatJid, async (result) => {
+    logger.debug(
+      {
+        hasResult: !!result.result,
+        attachmentCount: result.pendingImageAttachments?.length || 0,
+      },
+      'Streaming callback received output',
+    );
     // Streaming output callback — called for each agent result
     if (result.result) {
       const raw =
@@ -518,6 +525,11 @@ async function processJidMessages(chatJid: string): Promise<boolean> {
     }
 
     // Handle pending image attachments from SendImage tool calls
+    const attachmentCount = result.pendingImageAttachments?.length || 0;
+    logger.debug(
+      { attachmentCount, hasAttachments: attachmentCount > 0 },
+      'Checking for pending image attachments',
+    );
     if (
       result.pendingImageAttachments &&
       result.pendingImageAttachments.length > 0
