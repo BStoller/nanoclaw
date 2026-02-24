@@ -19,9 +19,11 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.46",
     "@ai-sdk/openai-compatible": "^2.0.30",
+    "@chat-adapter/discord": "^4.14.0",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "ai": "^6.0.97",
     "better-sqlite3": "^11.8.1",
+    "chat": "^4.14.0",
     "cron-parser": "^5.5.0",
     "discord.js": "^14.25.1",
     "fast-glob": "^3.3.3",
