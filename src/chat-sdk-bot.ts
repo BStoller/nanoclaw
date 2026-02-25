@@ -773,6 +773,7 @@ export async function createChatSdkBot(): Promise<Chat> {
         { threadId: thread.id, messageId: message.id },
         'skipping message from me',
       );
+      return;
     }
 
     if (message.isMention) {
