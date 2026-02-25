@@ -85,6 +85,7 @@ let sessions: Record<string, string> = {};
 let agents: Record<string, Agent> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let botInstance: Chat | null = null;
+let stateAdapter: ReturnType<typeof createSQLiteState> | null = null;
 
 // Track which messages we're processing (for 👀 reactions)
 const processingMessages = new Map<
@@ -484,6 +485,11 @@ async function runAgent(
     await clearAcknowledgement(thread, messageId, chatJid);
     logger.error({ chatJid, err }, 'Failed to run agent');
     await thread.post('Sorry, I encountered an error.');
+  } finally {
+    // Close the pipe to signal that we're done processing this message
+    // This allows the agent runtime to exit its message loop and return
+    agentRuntime.close(chatJid);
+    logger.debug({ chatJid }, 'Closed agent runtime pipe');
   }
 }
 
@@ -578,31 +584,6 @@ Add this to your \`ROUTES\` in \`src/router.ts\`:
 }
 
 /**
- * Safely execute a handler function, catching and logging any errors.
- * This prevents errors from bubbling up to the Chat SDK, which would
- * prevent proper lock release in the Discord adapter.
- */
-async function safeHandler<T extends unknown[]>(
-  handlerName: string,
-  handler: (...args: T) => Promise<void>,
-  ...args: T
-): Promise<void> {
-  try {
-    await handler(...args);
-  } catch (err) {
-    logger.error(
-      {
-        handler: handlerName,
-        error: err instanceof Error ? err.message : String(err),
-        stack: err instanceof Error ? err.stack : undefined,
-      },
-      'Handler error caught and suppressed to prevent lock issues',
-    );
-    // Error is suppressed - do not re-throw to allow Chat SDK to release lock
-  }
-}
-
-/**
  * Create and configure the Chat SDK bot
  */
 export async function createChatSdkBot(): Promise<Chat> {
@@ -626,8 +607,8 @@ export async function createChatSdkBot(): Promise<Chat> {
   );
 
   // Create SQLite state adapter
-  const state = createSQLiteState(path.join(DATA_DIR, 'nanoclaw.db'));
-  await state.connect();
+  stateAdapter = createSQLiteState(path.join(DATA_DIR, 'nanoclaw.db'));
+  await stateAdapter.connect();
 
   // Create Chat SDK bot
   const bot = new Chat({
@@ -640,81 +621,142 @@ export async function createChatSdkBot(): Promise<Chat> {
         logger: new PinoLoggerAdapter(logger),
       }),
     },
-    state,
+    state: stateAdapter,
     logger: new PinoLoggerAdapter(logger),
   });
 
   bot.onNewMention(async (thread, message) => {
-    await safeHandler(
-      'onNewMention',
-      async (thread, message) => {
-        const agent = resolveAgentForJid(thread.id);
+    const agent = resolveAgentForJid(thread.id);
 
-        if (!agent) {
-          logger.info(
-            { threadId: thread.id },
-            'Channel not routed; ignoring mention',
-          );
-          return;
+    if (!agent) {
+      logger.info(
+        { threadId: thread.id },
+        'Channel not routed; ignoring mention',
+      );
+      return;
+    }
+
+    // Subscribe to thread for follow-up messages
+    await thread.subscribe();
+
+    // Add acknowledgement reaction
+    await addAcknowledgement(thread, message.id, thread.id);
+
+    // Process attachments from Chat SDK message
+    let content = message.text || '';
+    let savedAttachments: InternalAttachment[] = [];
+
+    if (message.attachments && message.attachments.length > 0) {
+      logger.info(
+        { threadId: thread.id, attachmentCount: message.attachments.length },
+        'Processing attachments from mention',
+      );
+
+      const { savedAttachments: attachments, mediaNotes } =
+        await processChatSdkAttachments(message.attachments);
+      savedAttachments = attachments;
+
+      // Append media notes to content
+      if (mediaNotes.length > 0) {
+        if (content) {
+          content = `${content}\n\n${mediaNotes.join('\n')}`;
+        } else {
+          content = mediaNotes.join('\n');
         }
+      }
+    }
 
-        // Subscribe to thread for follow-up messages
-        await thread.subscribe();
+    // Store the message
+    handleIncomingMessage(
+      thread.id,
+      message.id,
+      message.author?.userId || 'unknown',
+      message.author?.userName || 'Unknown',
+      content,
+      message.metadata?.dateSent?.toISOString() || new Date().toISOString(),
+      savedAttachments,
+    );
 
-        // Add acknowledgement reaction
-        await addAcknowledgement(thread, message.id, thread.id);
+    // Run agent
+    const sessionId = ensureSessionForThread(thread.id);
+    await runAgent(thread.id, agent, content, sessionId, thread, message.id);
 
-        // Process attachments from Chat SDK message
-        let content = message.text || '';
-        let savedAttachments: InternalAttachment[] = [];
+    logger.info(
+      { threadId: thread.id, messageCount: message.text?.length },
+      'Processed new message in mentioned thread',
+    );
+  });
 
-        if (message.attachments && message.attachments.length > 0) {
-          logger.info(
-            {
-              threadId: thread.id,
-              attachmentCount: message.attachments.length,
-            },
-            'Processing attachments from mention',
-          );
+  // Handle subscribed messages (follow-ups in same thread)
+  bot.onSubscribedMessage(async (thread, message) => {
+    const agent = resolveAgentForJid(thread.id);
 
-          const { savedAttachments: attachments, mediaNotes } =
-            await processChatSdkAttachments(message.attachments);
-          savedAttachments = attachments;
+    if (!agent) {
+      return;
+    }
 
-          // Append media notes to content
-          if (mediaNotes.length > 0) {
-            if (content) {
-              content = `${content}\n\n${mediaNotes.join('\n')}`;
-            } else {
-              content = mediaNotes.join('\n');
-            }
-          }
+    // Get content
+    let content = message.text || '';
+
+    // Process attachments from Chat SDK message
+    let savedAttachments: InternalAttachment[] = [];
+
+    if (message.attachments && message.attachments.length > 0) {
+      logger.info(
+        { threadId: thread.id, attachmentCount: message.attachments.length },
+        'Processing attachments from subscribed message',
+      );
+
+      const { savedAttachments: attachments, mediaNotes } =
+        await processChatSdkAttachments(message.attachments);
+      savedAttachments = attachments;
+
+      // Append media notes to content
+      if (mediaNotes.length > 0) {
+        if (content) {
+          content = `${content}\n\n${mediaNotes.join('\n')}`;
+        } else {
+          content = mediaNotes.join('\n');
         }
+      }
+    }
 
-        // Store the message
-        handleIncomingMessage(
+    // Check for commands
+    const trimmed = content.trim();
+    if (trimmed.startsWith('/')) {
+      const command = trimmed.slice(1).toLowerCase();
+      if (['clear', 'status', 'chatid', 'update'].includes(command)) {
+        const response = await executeCommand(
           thread.id,
-          message.id,
-          message.author?.userId || 'unknown',
-          message.author?.userName || 'Unknown',
-          content,
-          message.metadata?.dateSent?.toISOString() || new Date().toISOString(),
-          savedAttachments,
+          command,
+          message.author?.userId,
         );
+        await thread.post(response);
+        return;
+      }
+    }
 
-        // Run agent
-        const sessionId = ensureSessionForThread(thread.id);
-        await runAgent(
-          thread.id,
-          agent,
-          content,
-          sessionId,
-          thread,
-          message.id,
-        );
-      },
-      thread,
-      message,
+    // Add acknowledgement
+    await addAcknowledgement(thread, message.id, thread.id);
+
+    // Store message
+    handleIncomingMessage(
+      thread.id,
+      message.id,
+      message.author?.userId || 'unknown',
+      message.author?.userName || 'Unknown',
+      content,
+      message.metadata?.dateSent?.toISOString() || new Date().toISOString(),
+      savedAttachments,
+    );
+
+    // Run agent
+    const sessionId = ensureSessionForThread(thread.id);
+    await runAgent(thread.id, agent, content, sessionId, thread, message.id);
+
+    logger.info(
+      { threadId: thread.id, messageCount: message.text?.length },
+      'Processed new message in subscribed thread',
     );
   });
 
@@ -852,6 +894,11 @@ export async function createChatSdkBot(): Promise<Chat> {
     const sessionId = ensureSessionForThread(thread.id);
 
     await runAgent(thread.id, agent, content, sessionId, thread, message.id);
+
+    logger.info(
+      { threadId: thread.id, messageCount: message.text?.length },
+      'Processed new message in unsubscribed thread',
+    );
   });
 
   // Handle slash commands

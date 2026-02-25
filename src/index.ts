@@ -23,6 +23,26 @@ import { getOrCreateSessionId } from './agent-runner/session-store.js';
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
 
+// Catch unhandled errors to prevent lock issues
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error(
+    {
+      reason: reason instanceof Error ? reason.message : String(reason),
+      stack: reason instanceof Error ? reason.stack : undefined,
+    },
+    'Unhandled Promise Rejection - this may cause lock issues',
+  );
+  // Don't exit - let the process continue
+});
+
+process.on('uncaughtException', (err) => {
+  logger.error(
+    { error: err.message, stack: err.stack },
+    'Uncaught Exception - process may be unstable',
+  );
+  // In production, you might want to exit here, but for now we continue
+});
+
 // Create a minimal queue for scheduled tasks
 const queue = new GroupQueue();
 

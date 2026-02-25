@@ -150,21 +150,41 @@ export class SQLiteStateAdapter implements StateAdapter {
 
     // Check if already locked
     const checkStmt = this.db!.prepare(
-      `SELECT token, expires_at FROM chat_sdk_locks WHERE thread_id = ?`,
+      `SELECT token, expires_at, created_at FROM chat_sdk_locks WHERE thread_id = ?`,
     );
     const existing = checkStmt.get(threadId) as
-      | { token: string; expires_at: number }
+      | { token: string; expires_at: number; created_at: number }
       | undefined;
 
     if (existing && existing.expires_at > Date.now()) {
+      const timeRemaining = existing.expires_at - Date.now();
+      const lockAge = Date.now() - existing.created_at;
+
       logger.debug(
-        { threadId, existingToken: existing.token },
+        {
+          threadId,
+          existingToken: existing.token,
+          timeRemainingMs: timeRemaining,
+          lockAgeMs: lockAge,
+        },
         'SQLiteStateAdapter lock already held',
       );
-      return null; // Already locked and not expired
+
+      // If lock is older than 45 seconds, consider it stuck and force release
+      // (normal lock TTL is 30 seconds, so 45s means it should have been released)
+      if (lockAge > 45000) {
+        logger.warn(
+          { threadId, existingToken: existing.token, lockAgeMs: lockAge },
+          'SQLiteStateAdapter detected stuck lock (>45s), force releasing',
+        );
+        this.forceReleaseLock(threadId);
+        // Continue to create new lock below
+      } else {
+        return null; // Lock is valid and not stuck
+      }
     }
 
-    // Create new lock
+    // Create new lock with created_at timestamp
     const lock: SQLiteLock = {
       threadId,
       token: generateToken(),
@@ -172,9 +192,9 @@ export class SQLiteStateAdapter implements StateAdapter {
     };
 
     const insertStmt = this.db!.prepare(
-      `INSERT OR REPLACE INTO chat_sdk_locks (thread_id, token, expires_at) VALUES (?, ?, ?)`,
+      `INSERT OR REPLACE INTO chat_sdk_locks (thread_id, token, expires_at, created_at) VALUES (?, ?, ?, ?)`,
     );
-    insertStmt.run(threadId, lock.token, lock.expiresAt);
+    insertStmt.run(threadId, lock.token, lock.expiresAt, Date.now());
 
     logger.debug(
       { threadId, token: lock.token, expiresAt: lock.expiresAt },
