@@ -27,9 +27,12 @@ import {
   getSessionLastTimestamp,
 } from './agent-runner/session-store.js';
 import { createAgentRuntime, AgentInput } from './agent-runner/runtime.js';
-import type { Agent } from './types.js';
+import type { Agent, Attachment as InternalAttachment } from './types.js';
+import { saveAttachment, buildMediaNote } from './attachments/store.js';
+import { getMimeTypeFromExtension } from './attachments/images.js';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import type { Logger as PinoLogger } from 'pino';
 
 // Adapter to wrap pino logger for Chat SDK compatibility
@@ -182,8 +185,92 @@ async function clearAcknowledgement(
 }
 
 /**
- * Store message and metadata from Chat SDK
+ * Process Chat SDK attachments - download, save, and build media notes
  */
+async function processChatSdkAttachments(
+  attachments: Array<{
+    type?: string;
+    url?: string;
+    name?: string;
+    mimeType?: string;
+    size?: number;
+    fetchData?: () => Promise<Buffer>;
+  }>,
+): Promise<{ savedAttachments: InternalAttachment[]; mediaNotes: string[] }> {
+  const savedAttachments: InternalAttachment[] = [];
+  const mediaNotes: string[] = [];
+
+  for (const att of attachments) {
+    try {
+      let buffer: Buffer | undefined;
+      let mimeType = att.mimeType || 'application/octet-stream';
+      let filename = att.name || 'attachment';
+
+      // Try fetchData first (preferred method)
+      if (att.fetchData) {
+        logger.debug(
+          { attachment: filename, mimeType },
+          'Downloading attachment via fetchData()',
+        );
+        buffer = await att.fetchData();
+      } else if (att.url) {
+        // Fallback to downloading from URL
+        logger.debug(
+          { attachment: filename, url: att.url },
+          'Downloading attachment from URL',
+        );
+        const response = await fetch(att.url, {
+          signal: AbortSignal.timeout(30000),
+        });
+        if (!response.ok) {
+          logger.warn(
+            { attachment: filename, status: response.status },
+            'Failed to download attachment',
+          );
+          mediaNotes.push(`[File: ${filename} - download failed]`);
+          continue;
+        }
+        buffer = Buffer.from(await response.arrayBuffer());
+      }
+
+      if (!buffer || buffer.length === 0) {
+        logger.warn({ attachment: filename }, 'Empty attachment buffer');
+        mediaNotes.push(`[File: ${filename} - empty]`);
+        continue;
+      }
+
+      // Save attachment to filesystem
+      const savedAttachment = await saveAttachment(buffer, filename, mimeType);
+      savedAttachments.push(savedAttachment);
+
+      // Build media note
+      const mediaNote = buildMediaNote(savedAttachment);
+      mediaNotes.push(mediaNote);
+
+      logger.info(
+        {
+          attachment: filename,
+          mimeType,
+          size: savedAttachment.size,
+          path: savedAttachment.path,
+        },
+        'Attachment saved successfully',
+      );
+    } catch (err) {
+      logger.error(
+        {
+          attachment: att.name,
+          error: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack : undefined,
+        },
+        'Error processing attachment',
+      );
+      mediaNotes.push(`[File: ${att.name || 'file'} - error processing]`);
+    }
+  }
+
+  return { savedAttachments, mediaNotes };
+}
 function handleIncomingMessage(
   chatJid: string,
   messageId: string,
@@ -257,6 +344,73 @@ async function runAgent(
         await thread.post(
           'Sorry, I encountered an error processing your request.',
         );
+      }
+
+      // Handle pending attachments from SendAttachment tool calls
+      if (output.pendingAttachments && output.pendingAttachments.length > 0) {
+        logger.info(
+          {
+            agent: agent.id,
+            chatJid,
+            attachmentCount: output.pendingAttachments.length,
+          },
+          'Sending attachments',
+        );
+
+        for (const pendingAtt of output.pendingAttachments) {
+          try {
+            // Read the file and send via Chat SDK
+            const fileBuffer = await fs.promises.readFile(pendingAtt.filePath);
+            const filename = path.basename(pendingAtt.filePath);
+            const mimeType = getMimeTypeFromExtension(pendingAtt.filePath);
+
+            await thread.post({
+              markdown: pendingAtt.caption || '',
+              files: [
+                {
+                  data: fileBuffer,
+                  filename,
+                  mimeType,
+                },
+              ],
+            });
+
+            // Store outgoing attachment metadata
+            const outgoingAttachment: InternalAttachment = {
+              id: crypto.randomUUID(),
+              filename,
+              path: pendingAtt.filePath,
+              mimeType,
+              size: fileBuffer.length,
+              createdAt: new Date().toISOString(),
+            };
+
+            // Generate a unique message ID for the outgoing attachment
+            const attachmentMessageId = `out-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+            storeAttachment(outgoingAttachment, attachmentMessageId, chatJid);
+
+            logger.info(
+              {
+                filePath: pendingAtt.filePath,
+                filename,
+                mimeType,
+                size: fileBuffer.length,
+              },
+              'Attachment sent',
+            );
+          } catch (sendErr) {
+            logger.error(
+              {
+                agent: agent.id,
+                chatJid,
+                filePath: pendingAtt.filePath,
+                error:
+                  sendErr instanceof Error ? sendErr.message : String(sendErr),
+              },
+              'Failed to send attachment',
+            );
+          }
+        }
       }
     });
   } catch (err) {
@@ -415,27 +569,44 @@ export async function createChatSdkBot(): Promise<Chat> {
     // Add acknowledgement reaction
     await addAcknowledgement(thread, message.id, thread.id);
 
+    // Process attachments from Chat SDK message
+    let content = message.text || '';
+    let savedAttachments: InternalAttachment[] = [];
+
+    if (message.attachments && message.attachments.length > 0) {
+      logger.info(
+        { threadId: thread.id, attachmentCount: message.attachments.length },
+        'Processing attachments from mention',
+      );
+
+      const { savedAttachments: attachments, mediaNotes } =
+        await processChatSdkAttachments(message.attachments);
+      savedAttachments = attachments;
+
+      // Append media notes to content
+      if (mediaNotes.length > 0) {
+        if (content) {
+          content = `${content}\n\n${mediaNotes.join('\n')}`;
+        } else {
+          content = mediaNotes.join('\n');
+        }
+      }
+    }
+
     // Store the message
     handleIncomingMessage(
       thread.id,
       message.id,
       message.author?.userId || 'unknown',
       message.author?.userName || 'Unknown',
-      message.text,
+      content,
       message.metadata?.dateSent?.toISOString() || new Date().toISOString(),
-      // TODO: Handle attachments
+      savedAttachments,
     );
 
     // Run agent
     const sessionId = ensureSessionForThread(thread.id);
-    await runAgent(
-      thread.id,
-      agent,
-      message.text,
-      sessionId,
-      thread,
-      message.id,
-    );
+    await runAgent(thread.id, agent, content, sessionId, thread, message.id);
   });
 
   // Handle subscribed messages (follow-ups in same thread)
@@ -448,6 +619,29 @@ export async function createChatSdkBot(): Promise<Chat> {
 
     // Get content
     let content = message.text || '';
+
+    // Process attachments from Chat SDK message
+    let savedAttachments: InternalAttachment[] = [];
+
+    if (message.attachments && message.attachments.length > 0) {
+      logger.info(
+        { threadId: thread.id, attachmentCount: message.attachments.length },
+        'Processing attachments from subscribed message',
+      );
+
+      const { savedAttachments: attachments, mediaNotes } =
+        await processChatSdkAttachments(message.attachments);
+      savedAttachments = attachments;
+
+      // Append media notes to content
+      if (mediaNotes.length > 0) {
+        if (content) {
+          content = `${content}\n\n${mediaNotes.join('\n')}`;
+        } else {
+          content = mediaNotes.join('\n');
+        }
+      }
+    }
 
     // Check for commands
     const trimmed = content.trim();
@@ -475,6 +669,7 @@ export async function createChatSdkBot(): Promise<Chat> {
       message.author?.userName || 'Unknown',
       content,
       message.metadata?.dateSent?.toISOString() || new Date().toISOString(),
+      savedAttachments,
     );
 
     // Run agent
@@ -509,27 +704,45 @@ export async function createChatSdkBot(): Promise<Chat> {
     // Add acknowledgement reaction
     await addAcknowledgement(thread, message.id, thread.id);
 
+    // Process attachments from Chat SDK message
+    let content = message.text || '';
+    let savedAttachments: InternalAttachment[] = [];
+
+    if (message.attachments && message.attachments.length > 0) {
+      logger.info(
+        { threadId: thread.id, attachmentCount: message.attachments.length },
+        'Processing attachments from new message',
+      );
+
+      const { savedAttachments: attachments, mediaNotes } =
+        await processChatSdkAttachments(message.attachments);
+      savedAttachments = attachments;
+
+      // Append media notes to content
+      if (mediaNotes.length > 0) {
+        if (content) {
+          content = `${content}\n\n${mediaNotes.join('\n')}`;
+        } else {
+          content = mediaNotes.join('\n');
+        }
+      }
+    }
+
     // Store the message
     handleIncomingMessage(
       thread.id,
       message.id,
       message.author?.userId || 'unknown',
       message.author?.userName || 'Unknown',
-      message.text,
+      content,
       message.metadata?.dateSent?.toISOString() || new Date().toISOString(),
+      savedAttachments,
     );
 
     // Run agent
     const sessionId = ensureSessionForThread(thread.id);
 
-    await runAgent(
-      thread.id,
-      agent,
-      message.text,
-      sessionId,
-      thread,
-      message.id,
-    );
+    await runAgent(thread.id, agent, content, sessionId, thread, message.id);
   });
 
   // Handle slash commands
@@ -553,7 +766,8 @@ export async function createChatSdkBot(): Promise<Chat> {
     await channel.post(response);
   });
 
-  bot
+  await bot.initialize();
+  await bot
     .getAdapter('discord')
     .startGatewayListener(
       { waitUntil: (promise) => promise },
@@ -561,8 +775,6 @@ export async function createChatSdkBot(): Promise<Chat> {
       undefined,
       undefined,
     );
-
-  await bot.initialize();
 
   // Store the bot instance for use by other modules
   botInstance = bot;
