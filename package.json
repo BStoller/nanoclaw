@@ -14,6 +14,7 @@
     "format:check": "prettier --check \"src/**/*.ts\"",
     "test": "vitest run",
     "test:watch": "vitest",
+    "add-channel": "tsx scripts/add-channel.ts",
     "postinstall": "patch-package"
   },
   "dependencies": {
