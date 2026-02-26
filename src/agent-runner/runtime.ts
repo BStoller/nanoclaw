@@ -195,8 +195,20 @@ function createModel({
     (process.env.OPENCODE_ZEN_API_KEY ?? process.env.ANTHROPIC_API_KEY) !=
     undefined;
 
+  if (!hasApiKey) {
+    throw new Error(
+      'No API key available for selected model provider. Please configure either OPENCODE_ZEN_API_KEY or ANTHROPIC_API_KEY in your environment.',
+    );
+  }
+
   if (configProvider === 'opencode-zen') {
     const apiKey = process.env.OPENCODE_ZEN_API_KEY;
+
+    if (!apiKey) {
+      throw new Error(
+        'OPENCODE_ZEN_API_KEY is required for opencode-zen provider',
+      );
+    }
 
     if (isOpenAIResponseFormat) {
       logger.debug(
