@@ -279,6 +279,10 @@ async function runQuery(
   const loadedMessages = loadMessages(input.chatJid, sessionId);
   messages.push(...loadedMessages);
 
+  // Prepend current datetime to the prompt so model always knows the current time
+  const now = new Date().toISOString();
+  const promptWithDatetime = `[Current date and time: ${now}]\n\n${prompt}`;
+
   // Check if model supports vision and inject images if available
   // Reuse existing config from line 256
   let userContent:
@@ -292,7 +296,7 @@ async function runQuery(
     const images = await detectAndLoadImages(prompt);
     if (images.length > 0) {
       userContent = [
-        { type: 'text' as const, text: prompt },
+        { type: 'text' as const, text: promptWithDatetime },
         ...images.map((img) => ({
           type: 'image' as const,
           image: img.base64,
@@ -300,10 +304,10 @@ async function runQuery(
         })),
       ];
     } else {
-      userContent = prompt;
+      userContent = promptWithDatetime;
     }
   } else {
-    userContent = prompt;
+    userContent = promptWithDatetime;
   }
 
   messages.push({ role: 'user', content: userContent });
