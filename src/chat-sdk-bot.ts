@@ -614,12 +614,9 @@ export async function createChatSdkBot(): Promise<Chat> {
 
   // Create Chat SDK bot
   const bot = new Chat({
-    userName: ASSISTANT_NAME.toLowerCase(),
+    userName: process.env.ASSISTANT_NAME ?? 'Andy'.toLowerCase(),
     adapters: {
       discord: createDiscordAdapter({
-        botToken: DISCORD_BOT_TOKEN,
-        publicKey: DISCORD_PUBLIC_KEY,
-        applicationId: DISCORD_APPLICATION_ID,
         logger: new PinoLoggerAdapter(logger),
       }),
     },
