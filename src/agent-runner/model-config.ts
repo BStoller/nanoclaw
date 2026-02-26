@@ -5,6 +5,7 @@ export interface ModelConfig {
   maxOutputTokens: number;
   compactionThresholdPercent: number;
   supportsVision: boolean;
+  isOpenAIResponseFormat?: boolean;
 }
 
 const DEFAULT_MODEL_CONFIG: ModelConfig = {
@@ -23,6 +24,7 @@ const MODEL_CONFIGS: Record<string, ModelConfig> = {
   'opencode-zen:gpt-5.3-codex': {
     provider: 'opencode-zen',
     modelName: 'gpt-5.3-codex',
+    isOpenAIResponseFormat: true,
     contextWindow: 400000,
     maxOutputTokens: 128000,
     compactionThresholdPercent: 60,

@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { createOpenAI, openai } from '@ai-sdk/openai';
 import path from 'path';
 import {
   streamText,
@@ -22,6 +23,7 @@ import {
   getModelConfig,
   isModelConfigured,
   listAvailableModelKeys,
+  ModelConfig,
 } from './model-config.js';
 import {
   getOrCreateSessionId,
@@ -184,21 +186,31 @@ function buildSystemPrompt(agentId: string, isMain: boolean): string {
   return parts.filter(Boolean).join('\n\n');
 }
 
-function createModel(
-  configProvider: string,
-  modelName: string,
-  secrets?: AgentSecrets,
-) {
+function createModel({
+  provider: configProvider,
+  modelName,
+  isOpenAIResponseFormat,
+}: ModelConfig) {
   const hasApiKey =
-    secrets?.OPENCODE_ZEN_API_KEY || process.env.OPENCODE_ZEN_API_KEY
-      ? true
-      : secrets?.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY
-        ? true
-        : false;
+    (process.env.OPENCODE_ZEN_API_KEY ?? process.env.ANTHROPIC_API_KEY) !=
+    undefined;
 
   if (configProvider === 'opencode-zen') {
-    const apiKey =
-      secrets?.OPENCODE_ZEN_API_KEY || process.env.OPENCODE_ZEN_API_KEY;
+    const apiKey = process.env.OPENCODE_ZEN_API_KEY;
+
+    if (isOpenAIResponseFormat) {
+      logger.debug(
+        { provider: configProvider, modelName, isOpenAIResponseFormat },
+        'Creating openai response format model',
+      );
+
+      const provider = createOpenAI({
+        apiKey: process.env.OPENCODE_ZEN_API_KEY,
+        baseURL: 'https://opencode.ai/zen/v1',
+      });
+
+      return provider.responses(modelName);
+    }
     logger.debug(
       { provider: configProvider, model: modelName, hasApiKey },
       'Creating OpenAI-compatible model',
@@ -218,9 +230,8 @@ function createModel(
       `Unknown provider, falling back to anthropic`,
     );
   }
-  const apiKey = secrets?.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY;
-  const authToken =
-    secrets?.ANTHROPIC_AUTH_TOKEN || process.env.ANTHROPIC_AUTH_TOKEN;
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const authToken = process.env.ANTHROPIC_AUTH_TOKEN;
   logger.debug(
     {
       provider: 'anthropic',
@@ -291,7 +302,7 @@ async function runQuery(
     'Starting model query',
   );
 
-  const model = createModel(config.provider, config.modelName);
+  const model = createModel(config);
 
   const systemPrompt = buildSystemPrompt(input.agentId, input.isMain);
   const routeInfo = getRouteInfo(input.chatJid);
@@ -764,7 +775,7 @@ async function compactSession(
     archiveConversation(input.chatJid, sessionId, messages);
 
     const config = getModelConfig(input.modelProvider, input.modelName);
-    const model = createModel(config.provider, config.modelName);
+    const model = createModel(config);
 
     const summaryPrompt = buildSummaryPrompt(older);
     let summaryText = '';
