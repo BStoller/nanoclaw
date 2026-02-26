@@ -1,5 +1,5 @@
 import fs from 'fs';
-import { createOpenAI, openai } from '@ai-sdk/openai';
+import { createOpenAI } from '@ai-sdk/openai';
 import path from 'path';
 import {
   streamText,
@@ -74,7 +74,6 @@ export interface AvailableGroup {
 
 export interface AgentRuntimeDeps {
   sendMessage: (jid: string, text: string, sender?: string) => Promise<void>;
-  registerAgent: (jid: string, agent: Agent) => void;
   getRegisteredAgents: () => Record<string, Agent>;
 }
 
@@ -392,8 +391,6 @@ async function runQuery(
     },
     nanoclawDeps: {
       sendMessage: deps.sendMessage,
-      registerAgent: deps.registerAgent,
-      getRegisteredAgents: deps.getRegisteredAgents,
     },
   }) as Record<string, any>;
 

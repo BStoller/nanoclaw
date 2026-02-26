@@ -16,9 +16,12 @@ import {
   storeAttachment,
   storeChatMetadata,
   initDatabase,
-  getAllAgents,
-  getAllSessions,
-  setAgent,
+  getAgent,
+  getSession,
+  setSession,
+  deleteSession,
+  setRouterState,
+  getRouterState,
 } from './db.js';
 import {
   clearSession,
@@ -81,9 +84,6 @@ class PinoLoggerAdapter implements ChatLogger {
 }
 
 // State management
-let sessions: Record<string, string> = {};
-let agents: Record<string, Agent> = {};
-let lastAgentTimestamp: Record<string, string> = {};
 let botInstance: Chat | null = null;
 let stateAdapter: ReturnType<typeof createSQLiteState> | null = null;
 
@@ -107,16 +107,35 @@ function jidToThreadId(jid: string): string {
 }
 
 /**
- * Get or create session for a channel
+ * Get last agent timestamps from DB
  */
-function ensureSessionForThread(threadId: string): string {
-  if (!sessions[threadId]) {
-    const agentId = resolveAgentId(threadId);
-    if (agentId) {
-      sessions[threadId] = getOrCreateSessionId(threadId, agentId);
+function getLastAgentTimestamps(): Record<string, string> {
+  const stored = getRouterState('last_agent_timestamp');
+  if (stored) {
+    try {
+      return JSON.parse(stored);
+    } catch {
+      return {};
     }
   }
-  return sessions[threadId];
+  return {};
+}
+function ensureSessionForThread(threadId: string): string {
+  const agentId = resolveAgentId(threadId);
+  if (!agentId) {
+    throw new Error(`No agent configured for thread ${threadId}`);
+  }
+
+  // Check DB for existing session
+  const session = getSession(threadId);
+  if (session) {
+    return session.sessionId;
+  }
+
+  // Create new session
+  const sessionId = getOrCreateSessionId(threadId, agentId);
+  setSession(threadId, agentId, sessionId);
+  return sessionId;
 }
 
 /**
@@ -124,10 +143,10 @@ function ensureSessionForThread(threadId: string): string {
  */
 function resolveAgentForJid(chatJid: string): Agent | null {
   const agentId = resolveAgentId(chatJid);
-  if (!agentId || !agents[agentId]) {
+  if (!agentId) {
     return null;
   }
-  return agents[agentId];
+  return getAgent(agentId) ?? null;
 }
 
 /**
@@ -420,8 +439,13 @@ async function runAgent(
       // Send the response
       await thread.post(output.result);
 
-      // Update timestamp
-      lastAgentTimestamp[chatJid] = new Date().toISOString();
+      // Update timestamp in DB
+      const lastAgentTimestamps = getLastAgentTimestamps();
+      lastAgentTimestamps[chatJid] = new Date().toISOString();
+      setRouterState(
+        'last_agent_timestamp',
+        JSON.stringify(lastAgentTimestamps),
+      );
     } else if (output.status === 'error') {
       await clearAcknowledgement(thread, messageId);
       logger.error({ chatJid, error: output.error }, 'Agent error');
@@ -499,11 +523,7 @@ const agentRuntime = createAgentRuntime({
       'Tool tried to send message - not implemented in Chat SDK mode',
     );
   },
-  registerAgent: (jid, agent) => {
-    agents[agent.id] = agent;
-    setAgent(agent.id, agent);
-  },
-  getRegisteredAgents: () => agents,
+  getRegisteredAgents: () => ({}),
 });
 
 /**
@@ -523,19 +543,20 @@ async function executeCommand(
 
   if (normalizedCommand === 'clear') {
     clearSession(chatJid);
-    delete sessions[chatJid];
+    deleteSession(chatJid);
     return 'Session cleared. New conversation will start on next message.';
   } else if (normalizedCommand === 'status') {
-    const sessionId = sessions[chatJid];
-    if (!sessionId) {
+    const session = getSession(chatJid);
+    if (!session) {
       return `Status: agent=${agent.id} session=none (no active session)`;
     }
     const modelProvider = agent.modelProvider || 'opencode-zen';
     const modelName = agent.modelName || 'kimi-k2.5';
-    const messageCount = getSessionMessageCount(chatJid, sessionId);
-    const tokenCount = getSessionTokenCount(chatJid, sessionId);
-    const lastTs = getSessionLastTimestamp(chatJid, sessionId) || 'none';
-    return `Status: agent=${agent.id} session=${sessionId} model=${modelProvider}/${modelName} messages=${messageCount} tokens=${tokenCount} last=${lastTs}`;
+    const messageCount = getSessionMessageCount(chatJid, session.sessionId);
+    const tokenCount = getSessionTokenCount(chatJid, session.sessionId);
+    const lastTs =
+      getSessionLastTimestamp(chatJid, session.sessionId) || 'none';
+    return `Status: agent=${agent.id} session=${session.sessionId} model=${modelProvider}/${modelName} messages=${messageCount} tokens=${tokenCount} last=${lastTs}`;
   } else if (normalizedCommand === 'chatid') {
     const threadId = jidToThreadId(chatJid);
     return `This channel's ID is: \`${threadId}\`
@@ -586,21 +607,6 @@ export async function createChatSdkBot(): Promise<Chat> {
   // Initialize database
   initDatabase();
   logger.info('Database initialized');
-
-  // Load state
-  const sessionData = getAllSessions();
-  for (const [jid, data] of Object.entries(sessionData)) {
-    sessions[jid] = data.sessionId;
-  }
-  agents = getAllAgents();
-
-  logger.info(
-    {
-      agentCount: Object.keys(agents).length,
-      sessionCount: Object.keys(sessions).length,
-    },
-    'State loaded',
-  );
 
   // Create SQLite state adapter
   stateAdapter = createSQLiteState(path.join(DATA_DIR, 'nanoclaw.db'));
@@ -946,5 +952,3 @@ export async function sendMessageToJid(
     throw err;
   }
 }
-
-export { agents, sessions };

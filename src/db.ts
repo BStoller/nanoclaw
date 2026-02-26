@@ -698,7 +698,12 @@ export function getAgent(id: string): Agent | undefined {
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     modelProvider: row.model_provider ?? undefined,
     modelName: row.model_name ?? undefined,
-    isMain: row.is_main === null ? undefined : row.is_main === 1,
+    isMain:
+      row.id === 'main'
+        ? true
+        : row.is_main === null
+          ? undefined
+          : row.is_main === 1,
   };
 }
 
@@ -743,7 +748,12 @@ export function getAllAgents(): Record<string, Agent> {
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       modelProvider: row.model_provider ?? undefined,
       modelName: row.model_name ?? undefined,
-      isMain: row.is_main === null ? undefined : row.is_main === 1,
+      isMain:
+        row.id === 'main'
+          ? true
+          : row.is_main === null
+            ? undefined
+            : row.is_main === 1,
     };
   }
   return result;

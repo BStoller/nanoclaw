@@ -10,6 +10,8 @@ import {
   getTaskById,
   updateTask,
   setRoute,
+  getAllAgents,
+  setAgent,
 } from '../../db.js';
 import { Agent } from '../../types.js';
 import { resolveAgentId, isNoReply } from '../../router.js';
@@ -23,11 +25,9 @@ export interface NanoClawContext {
 
 export interface NanoClawDeps {
   sendMessage: (jid: string, text: string, sender?: string) => Promise<void>;
-  registerAgent: (id: string, agent: Agent) => void;
-  getRegisteredAgents: () => Record<string, Agent>;
 }
 
-function createOrUpdateAgent(
+async function createOrUpdateAgent(
   deps: NanoClawDeps,
   ctx: NanoClawContext,
   input: {
@@ -65,7 +65,9 @@ function createOrUpdateAgent(
     };
   }
 
-  const existingAgent = deps.getRegisteredAgents()[input.id];
+  const agents = await getAllAgents();
+
+  const existingAgent = agents[input.id];
 
   const agent: Agent = {
     id: input.id,
@@ -77,7 +79,7 @@ function createOrUpdateAgent(
     modelName: input.modelName,
   };
 
-  deps.registerAgent(input.id, agent);
+  setAgent(input.id, agent);
 
   const action = existingAgent ? 'updated' : 'created';
   return {
@@ -422,7 +424,7 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
         }
 
         // Verify agent exists
-        const agents = deps.getRegisteredAgents();
+        const agents = getAllAgents();
         if (!agents[input.agent_id]) {
           return { error: `Agent "${input.agent_id}" not found.` };
         }
@@ -439,7 +441,7 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
       description: 'List all registered agents.',
       inputSchema: z.object({}).optional(),
       execute: async () => {
-        const agents = deps.getRegisteredAgents();
+        const agents = getAllAgents();
         const agentList = Object.values(agents)
           .map((a) => `- ${a.id}: ${a.name} (trigger: ${a.trigger})`)
           .join('\n');

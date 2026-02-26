@@ -2,17 +2,13 @@ import fs from 'fs';
 import path from 'path';
 
 import { DATA_DIR } from './config.js';
-import {
-  createChatSdkBot,
-  agents,
-  sessions,
-  sendMessageToJid,
-} from './chat-sdk-bot.js';
+import { createChatSdkBot, sendMessageToJid } from './chat-sdk-bot.js';
 import { logger } from './logger.js';
 import { formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { GroupQueue } from './group-queue.js';
-import { initDatabase } from './db.js';
+import { initDatabase, getAllAgents, getAllSessions, setAgent } from './db.js';
+import { Agent } from './types.js';
 import {
   AgentOutput,
   AgentInput,
@@ -56,8 +52,8 @@ const agentRuntime = createAgentRuntime({
       logger.error({ jid, err }, 'Failed to send message from agent runtime');
     }
   },
-  registerAgent: () => {},
-  getRegisteredAgents: () => agents,
+  registerAgent: (id: string, agent: Agent) => setAgent(id, agent),
+  getRegisteredAgents: () => getAllAgents(),
 });
 
 /**
@@ -76,8 +72,15 @@ async function main(): Promise<void> {
 
   // Start scheduler loop for background tasks
   startSchedulerLoop({
-    agents: () => agents,
-    getSessions: () => sessions,
+    agents: () => getAllAgents(),
+    getSessions: () => {
+      const sessions: Record<string, string> = {};
+      const dbSessions = getAllSessions();
+      for (const [jid, data] of Object.entries(dbSessions)) {
+        sessions[jid] = data.sessionId;
+      }
+      return sessions;
+    },
     runAgent: async (input: AgentInput) => {
       // Run the agent and return result
       return await agentRuntime.run(input);
