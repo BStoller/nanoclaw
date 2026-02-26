@@ -20,7 +20,42 @@ const MODEL_CONFIGS: Record<string, ModelConfig> = {
   'opencode-zen:kimi-k2.5': {
     ...DEFAULT_MODEL_CONFIG,
   },
+  'opencode-zen:gpt-5.3-codex': {
+    provider: 'opencode-zen',
+    modelName: 'gpt-5.3-codex',
+    contextWindow: 400000,
+    maxOutputTokens: 128000,
+    compactionThresholdPercent: 60,
+    supportsVision: true,
+  },
 };
+
+export function getAvailableModels(): Array<{
+  provider: string;
+  modelName: string;
+  contextWindow: number;
+  maxOutputTokens: number;
+  supportsVision: boolean;
+}> {
+  return Object.values(MODEL_CONFIGS).map((config) => ({
+    provider: config.provider,
+    modelName: config.modelName,
+    contextWindow: config.contextWindow,
+    maxOutputTokens: config.maxOutputTokens,
+    supportsVision: config.supportsVision,
+  }));
+}
+
+export function listAvailableModelKeys(): string[] {
+  return Object.keys(MODEL_CONFIGS).sort();
+}
+
+export function isModelConfigured(
+  provider: string,
+  modelName: string,
+): boolean {
+  return `${provider}:${modelName}` in MODEL_CONFIGS;
+}
 
 export function getModelConfig(
   provider?: string,

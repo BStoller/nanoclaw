@@ -13,6 +13,7 @@ import {
 } from '../../db.js';
 import { Agent } from '../../types.js';
 import { resolveAgentId, isNoReply } from '../../router.js';
+import { getAvailableModels, isModelConfigured } from '../model-config.js';
 
 export interface NanoClawContext {
   chatJid: string;
@@ -31,6 +32,20 @@ function formatTaskList(tasks: ReturnType<typeof getAllTasks>): string {
     .map(
       (t) =>
         `- [${t.id}] ${t.prompt.slice(0, 50)}... (${t.schedule_type}: ${t.schedule_value}) - ${t.status}, next: ${t.next_run || 'N/A'}`,
+    )
+    .join('\n');
+}
+
+function formatAvailableModels(): string {
+  const models = getAvailableModels();
+  if (models.length === 0) {
+    return 'No models configured.';
+  }
+
+  return models
+    .map(
+      (m) =>
+        `- ${m.provider}:${m.modelName} (context=${m.contextWindow}, maxOutput=${m.maxOutputTokens}, vision=${m.supportsVision ? 'yes' : 'no'})`,
     )
     .join('\n');
 }
@@ -277,15 +292,47 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
         name: z.string().describe('Display name'),
         folder: z.string().describe('Folder name'),
         trigger: z.string().describe('Trigger word'),
+        modelProvider: z
+          .string()
+          .optional()
+          .describe('Optional model provider (for example: "opencode-zen")'),
+        modelName: z
+          .string()
+          .optional()
+          .describe('Optional model name (for example: "gpt-5.3-codex")'),
       }),
       execute: async (input: {
         id: string;
         name: string;
         folder: string;
         trigger: string;
+        modelProvider?: string;
+        modelName?: string;
       }) => {
         if (!ctx.isMain) {
           return { error: 'Only the main agent can register new agents.' };
+        }
+
+        const hasProvider = !!input.modelProvider;
+        const hasModel = !!input.modelName;
+        if (hasProvider !== hasModel) {
+          return {
+            error:
+              'Model selection must include both modelProvider and modelName.\n\nAvailable models:\n' +
+              formatAvailableModels(),
+          };
+        }
+
+        if (
+          input.modelProvider &&
+          input.modelName &&
+          !isModelConfigured(input.modelProvider, input.modelName)
+        ) {
+          return {
+            error:
+              `Invalid model selection: ${input.modelProvider}:${input.modelName}.\n\nAvailable models:\n` +
+              formatAvailableModels(),
+          };
         }
 
         // Create agent with required id field
@@ -295,12 +342,23 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
           folder: input.folder,
           trigger: input.trigger,
           added_at: new Date().toISOString(),
+          modelProvider: input.modelProvider,
+          modelName: input.modelName,
         };
 
         deps.registerAgent(input.id, agent);
         return {
           ok: true,
           message: `Agent "${input.name}" registered. Add a route via add_route to connect JIDs to this agent.`,
+        };
+      },
+    }),
+    list_models: tool({
+      description: 'List available model selections for agents.',
+      inputSchema: z.object({}).optional(),
+      execute: async () => {
+        return {
+          message: `Available models:\n${formatAvailableModels()}`,
         };
       },
     }),

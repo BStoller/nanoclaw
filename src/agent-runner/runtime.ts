@@ -17,7 +17,12 @@ import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { Agent } from '../types.js';
 import { createToolRegistry } from './tool-registry.js';
-import { getCompactionThreshold, getModelConfig } from './model-config.js';
+import {
+  getCompactionThreshold,
+  getModelConfig,
+  isModelConfigured,
+  listAvailableModelKeys,
+} from './model-config.js';
 import {
   getOrCreateSessionId,
   getSessionTokenCount,
@@ -230,6 +235,32 @@ function createModel(
     ...(authToken ? { authToken } : {}),
   });
   return provider(modelName);
+}
+
+function validateRequestedModel(input: AgentInput): void {
+  const hasProvider = !!input.modelProvider;
+  const hasModel = !!input.modelName;
+
+  if (hasProvider !== hasModel) {
+    throw new Error(
+      'Model selection must include both modelProvider and modelName.',
+    );
+  }
+
+  if (!hasProvider || !hasModel) {
+    return;
+  }
+
+  const provider = input.modelProvider as string;
+  const modelName = input.modelName as string;
+  if (isModelConfigured(provider, modelName)) {
+    return;
+  }
+
+  const available = listAvailableModelKeys().join(', ');
+  throw new Error(
+    `Invalid model selection: ${provider}:${modelName}. Available models: ${available}`,
+  );
 }
 
 async function runQuery(
@@ -1001,6 +1032,8 @@ export function createAgentRuntime(deps: AgentRuntimeDeps): AgentRuntime {
       },
       'Agent run starting',
     );
+
+    validateRequestedModel(input);
 
     if (!input.modelProvider) input.modelProvider = DEFAULT_MODEL_PROVIDER;
     if (!input.modelName) input.modelName = DEFAULT_MODEL_NAME;
