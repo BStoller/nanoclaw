@@ -541,7 +541,7 @@ async function executeCommand(
   const normalizedCommand = command.toLowerCase().replace(/^\//, '');
 
   if (normalizedCommand === 'clear') {
-    clearSession(chatJid);
+    await clearSession(chatJid);
     deleteSession(chatJid);
     return 'Session cleared. New conversation will start on next message.';
   } else if (normalizedCommand === 'status') {
@@ -551,10 +551,13 @@ async function executeCommand(
     }
     const modelProvider = agent.modelProvider || 'opencode-zen';
     const modelName = agent.modelName || 'kimi-k2.5';
-    const messageCount = getSessionMessageCount(chatJid, session.sessionId);
-    const tokenCount = getSessionTokenCount(chatJid, session.sessionId);
+    const messageCount = await getSessionMessageCount(
+      chatJid,
+      session.sessionId,
+    );
+    const tokenCount = await getSessionTokenCount(chatJid, session.sessionId);
     const lastTs =
-      getSessionLastTimestamp(chatJid, session.sessionId) || 'none';
+      (await getSessionLastTimestamp(chatJid, session.sessionId)) || 'none';
     return `Status: agent=${agent.id} session=${session.sessionId} model=${modelProvider}/${modelName} messages=${messageCount} tokens=${tokenCount} last=${lastTs}`;
   } else if (normalizedCommand === 'chatid') {
     const threadId = jidToThreadId(chatJid);
