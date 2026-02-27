@@ -19,6 +19,7 @@ export const logger = pino({
     targets: [
       {
         target: 'pino-pretty',
+        level,
         options: {
           colorize: useColors,
           translateTime: 'yyyy-mm-dd HH:MM:ss.l',
@@ -29,6 +30,7 @@ export const logger = pino({
       },
       {
         target: 'pino/file',
+        level,
         options: {
           destination: path.join(logsDir, 'nanoclaw.log'),
           mkdir: true,

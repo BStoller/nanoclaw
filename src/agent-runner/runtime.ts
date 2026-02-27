@@ -36,6 +36,7 @@ import {
   detectAndLoadImages,
   extractImagePathsFromMediaNotes,
 } from '../attachments/images';
+import { pruneToolOutputs } from '../context/prune';
 
 const DEFAULT_MODEL_PROVIDER = 'opencode-zen';
 const DEFAULT_MODEL_NAME = 'kimi-k2.5';
@@ -433,6 +434,8 @@ async function runQuery(
         const lastAssistant = responseMessages
           .filter((m) => m.role === 'assistant')
           .pop();
+
+        pruneToolOutputs(input.chatJid, sessionId);
 
         // Check for mid-stream overflow
         const threshold = getCompactionThreshold(config);
@@ -889,6 +892,8 @@ async function compactSession(
       },
       'Compaction failed',
     );
+
+    throw err;
   }
 }
 
