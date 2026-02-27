@@ -116,8 +116,8 @@ export function parseThreadId(threadId: string): {
  * Handles all Chat SDK formats: discord:..., slack:..., teams:..., gchat:...
  * Also handles legacy formats: dc:... (auto-converted to discord::...)
  */
-export function resolveAgentId(threadId: string): string | null {
-  const dbRoutes = getAllRoutes();
+export async function resolveAgentId(threadId: string): Promise<string | null> {
+  const dbRoutes = await getAllRoutes();
   // Fast path: exact match on full thread ID
   if (dbRoutes[threadId]) return dbRoutes[threadId];
 
@@ -160,10 +160,10 @@ export function resolveAgentId(threadId: string): string | null {
  * Get route information for a thread ID.
  * Returns the agent ID and thread ID for context.
  */
-export function getRouteInfo(
+export async function getRouteInfo(
   threadId: string,
-): { threadId: string; agentId: string } | null {
-  const agentId = resolveAgentId(threadId);
+): Promise<{ threadId: string; agentId: string } | null> {
+  const agentId = await resolveAgentId(threadId);
   if (!agentId) return null;
   return { threadId, agentId };
 }

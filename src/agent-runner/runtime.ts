@@ -13,30 +13,30 @@ import {
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
-import { AGENTS_DIR, SESSIONS_DIR } from '../config.js';
-import { readEnvFile } from '../env.js';
-import { logger } from '../logger.js';
-import { Agent } from '../types.js';
-import { createToolRegistry } from './tool-registry.js';
+import { AGENTS_DIR, SESSIONS_DIR } from '../config';
+import { logger } from '../logger';
+import { Agent } from '../types';
+import { createToolRegistry } from './tool-registry';
 import {
   getCompactionThreshold,
   getModelConfig,
   isModelConfigured,
   listAvailableModelKeys,
   ModelConfig,
-} from './model-config.js';
+} from './model-config';
 import {
   getOrCreateSessionId,
   getSessionTokenCount,
   loadMessages,
   replaceSessionMessages,
   saveMessage,
-} from './session-store.js';
-import { getRouteInfo } from '../router.js';
+} from './session-store';
+import { getRouteInfo } from '../router';
 import {
   detectAndLoadImages,
   extractImagePathsFromMediaNotes,
-} from '../attachments/images.js';
+} from '../attachments/images';
+import { pruneToolOutputs } from '../context/prune';
 
 const DEFAULT_MODEL_PROVIDER = 'opencode-zen';
 const DEFAULT_MODEL_NAME = 'kimi-k2.5';
@@ -74,7 +74,7 @@ export interface AvailableGroup {
 
 export interface AgentRuntimeDeps {
   sendMessage: (jid: string, text: string, sender?: string) => Promise<void>;
-  getRegisteredAgents: () => Record<string, Agent>;
+  getRegisteredAgents: () => Promise<Record<string, Agent>>;
 }
 
 export interface AgentRuntime {
@@ -86,15 +86,6 @@ interface AgentSecrets {
   ANTHROPIC_API_KEY?: string;
   ANTHROPIC_AUTH_TOKEN?: string;
   OPENCODE_ZEN_API_KEY?: string;
-}
-
-function readSecrets(): AgentSecrets {
-  return readEnvFile([
-    'CLAUDE_CODE_OAUTH_TOKEN',
-    'ANTHROPIC_API_KEY',
-    'ANTHROPIC_AUTH_TOKEN',
-    'OPENCODE_ZEN_API_KEY',
-  ]);
 }
 
 // File watching cache for CLAUDE.md files
@@ -316,7 +307,7 @@ async function runQuery(
   const model = createModel(config);
 
   const systemPrompt = buildSystemPrompt(input.agentId, input.isMain);
-  const routeInfo = getRouteInfo(input.chatJid);
+  const routeInfo = await getRouteInfo(input.chatJid);
   const routeContext = routeInfo
     ? `You are operating in the conversation "${routeInfo.threadId}" with agent "${routeInfo.agentId}".`
     : `You are operating in the conversation "${input.chatJid}" with agent "${input.agentId}".`;
@@ -329,7 +320,7 @@ async function runQuery(
   } else {
     messages.push({ role: 'system', content: routeContext });
   }
-  const loadedMessages = loadMessages(input.chatJid, sessionId);
+  const loadedMessages = await loadMessages(input.chatJid, sessionId);
   messages.push(...loadedMessages);
 
   // Prepend current datetime to the prompt so model always knows the current time
@@ -408,6 +399,8 @@ async function runQuery(
   const streamStartTime = Date.now();
   let streamError: Error | null = null;
 
+  logger.debug({ msgs: messages }, 'messages being sent to the stream');
+
   try {
     // Wrap model with reasoning extraction middleware
     const wrappedModel = wrapLanguageModel({
@@ -419,6 +412,20 @@ async function runQuery(
       model: wrappedModel,
       messages,
       tools,
+      onError: (event) => {
+        const error = event.error as any;
+        logger.error(
+          {
+            agent: input.agentId,
+            sessionId,
+            error: JSON.stringify(event.error, Object.keys(event.error as any)),
+            chunkCount,
+            model: config.modelName,
+            provider: config.provider,
+          },
+          'Stream failed to process',
+        );
+      },
       maxOutputTokens: config.maxOutputTokens,
       stopWhen: stepCountIs(500),
       onFinish: (event) => {
@@ -427,6 +434,30 @@ async function runQuery(
         const lastAssistant = responseMessages
           .filter((m) => m.role === 'assistant')
           .pop();
+
+        // Fire and forget - don't block on pruning
+        pruneToolOutputs(input.chatJid, sessionId).catch((err) => {
+          logger.warn({ jid: input.chatJid, sessionId, err }, 'Pruning failed');
+        });
+
+        // Check for mid-stream overflow
+        const threshold = getCompactionThreshold(config);
+        getSessionTokenCount(input.chatJid, sessionId).then((tokenCount) => {
+          const currentTokens = tokenCount + usageTokens;
+          if (currentTokens >= threshold && !activeCompactions.has(sessionId)) {
+            logger.warn(
+              {
+                agent: input.agentId,
+                sessionId,
+                currentTokens,
+                threshold,
+                overflow: currentTokens - threshold,
+              },
+              'Context overflow detected mid-stream',
+            );
+          }
+        });
+
         logger.debug(
           {
             agent: input.agentId,
@@ -551,7 +582,7 @@ async function runQuery(
   }
 
   // Save messages to session store
-  saveMessage(
+  await saveMessage(
     input.chatJid,
     sessionId,
     { role: 'user', content: prompt },
@@ -563,7 +594,13 @@ async function runQuery(
     const tokenCount =
       !tokenAssigned && message.role === 'assistant' ? usageTokens : null;
     if (tokenCount != null) tokenAssigned = true;
-    saveMessage(input.chatJid, sessionId, message, tokenCount);
+
+    saveMessage(input.chatJid, sessionId, message, tokenCount).catch((err) => {
+      logger.warn(
+        { jid: input.chatJid, sessionId, err },
+        'Failed to save message',
+      );
+    });
   }
 
   const totalDuration = Date.now() - queryStartTime;
@@ -628,7 +665,7 @@ async function maybeCompactSession(
   const threshold = getCompactionThreshold(config);
 
   const currentTokens =
-    getSessionTokenCount(input.chatJid, sessionId) + (usageTokens || 0);
+    (await getSessionTokenCount(input.chatJid, sessionId)) + (usageTokens || 0);
 
   logger.debug(
     {
@@ -672,7 +709,8 @@ async function maybeCompactSessionPreflight(
     return;
   }
 
-  const messages = loadMessages(input.chatJid, sessionId);
+  // Load only uncompacted messages
+  const messages = await loadMessages(input.chatJid, sessionId);
   if (messages.length < 4) {
     logger.debug(
       { agent: input.agentId, sessionId, messageCount: messages.length },
@@ -681,6 +719,7 @@ async function maybeCompactSessionPreflight(
     return;
   }
 
+  // Use context module's token estimation
   const estimatedTokens =
     estimateTokenCount(messages) + Math.ceil(promptText.length / 4);
 
@@ -720,6 +759,26 @@ async function maybeCompactSessionPreflight(
 
   if (totalEstimatedTokens < threshold) return;
 
+  // Re-check after pruning
+  const prunedMessages = await loadMessages(input.chatJid, sessionId);
+  const newEstimate =
+    estimateTokenCount(prunedMessages) +
+    Math.ceil(promptText.length / 4) +
+    estimatedImageTokens;
+
+  if (newEstimate < threshold) {
+    logger.info(
+      {
+        agent: input.agentId,
+        sessionId,
+        before: totalEstimatedTokens,
+        after: newEstimate,
+      },
+      'Pruning avoided compaction',
+    );
+    return;
+  }
+
   activeCompactions.add(sessionId);
   await compactSession(input, sessionId);
   activeCompactions.delete(sessionId);
@@ -736,7 +795,7 @@ async function compactSession(
   );
 
   try {
-    const messages = loadMessages(input.chatJid, sessionId);
+    const messages = await loadMessages(input.chatJid, sessionId);
     if (messages.length < 4) {
       logger.debug(
         { agent: input.agentId, sessionId, messageCount: messages.length },
@@ -771,19 +830,6 @@ async function compactSession(
       return;
     }
 
-    logger.info(
-      {
-        agent: input.agentId,
-        sessionId,
-        totalMessages: messages.length,
-        olderMessages: older.length,
-        recentMessages: recent.length,
-      },
-      'Compacting session - archiving and summarizing',
-    );
-
-    archiveConversation(input.chatJid, sessionId, messages);
-
     const config = getModelConfig(input.modelProvider, input.modelName);
     const model = createModel(config);
 
@@ -803,7 +849,7 @@ async function compactSession(
         {
           role: 'system',
           content:
-            'Summarize the earlier conversation for future context. Be concise and preserve key facts, decisions, preferences, and open tasks.',
+            'Provide a detailed summary for continuing our conversation. Focus on information that would be helpful for continuing the conversation, including what we did, what we are doing, which files we are working on, and what we are going to do next.',
         },
         { role: 'user', content: summaryPrompt },
       ],
@@ -817,12 +863,14 @@ async function compactSession(
 
     const summaryDuration = Date.now() - summaryStreamStart;
 
+    // Create summary message with compaction marker
     const summaryMessage: ModelMessage = {
       role: 'system',
       content: `Summary of earlier conversation:\n${summaryText.trim()}`,
     };
 
-    replaceSessionMessages(input.chatJid, sessionId, [
+    // Replace messages: summary + recent (both soft compacted and recent)
+    await replaceSessionMessages(input.chatJid, sessionId, [
       summaryMessage,
       ...recent,
     ]);
@@ -852,6 +900,8 @@ async function compactSession(
       },
       'Compaction failed',
     );
+
+    throw err;
   }
 }
 

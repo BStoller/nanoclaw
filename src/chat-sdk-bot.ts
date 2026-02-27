@@ -15,7 +15,6 @@ import {
   storeMessage,
   storeAttachment,
   storeChatMetadata,
-  initDatabase,
   getAgent,
   getSession,
   setSession,
@@ -109,8 +108,8 @@ function jidToThreadId(jid: string): string {
 /**
  * Get last agent timestamps from DB
  */
-function getLastAgentTimestamps(): Record<string, string> {
-  const stored = getRouterState('last_agent_timestamp');
+async function getLastAgentTimestamps(): Promise<Record<string, string>> {
+  const stored = await getRouterState('last_agent_timestamp');
   if (stored) {
     try {
       return JSON.parse(stored);
@@ -120,33 +119,33 @@ function getLastAgentTimestamps(): Record<string, string> {
   }
   return {};
 }
-function ensureSessionForThread(threadId: string): string {
-  const agentId = resolveAgentId(threadId);
+async function ensureSessionForThread(threadId: string): Promise<string> {
+  const agentId = await resolveAgentId(threadId);
   if (!agentId) {
     throw new Error(`No agent configured for thread ${threadId}`);
   }
 
   // Check DB for existing session
-  const session = getSession(threadId);
+  const session = await getSession(threadId);
   if (session) {
     return session.sessionId;
   }
 
   // Create new session
   const sessionId = getOrCreateSessionId(threadId, agentId);
-  setSession(threadId, agentId, sessionId);
+  await setSession(threadId, agentId, sessionId);
   return sessionId;
 }
 
 /**
  * Resolve agent for a JID
  */
-function resolveAgentForJid(chatJid: string): Agent | null {
-  const agentId = resolveAgentId(chatJid);
+async function resolveAgentForJid(chatJid: string): Promise<Agent | null> {
+  const agentId = await resolveAgentId(chatJid);
   if (!agentId) {
     return null;
   }
-  return getAgent(agentId) ?? null;
+  return (await getAgent(agentId)) ?? null;
 }
 
 /**
@@ -440,7 +439,7 @@ async function runAgent(
       await thread.post(output.result);
 
       // Update timestamp in DB
-      const lastAgentTimestamps = getLastAgentTimestamps();
+      const lastAgentTimestamps = await getLastAgentTimestamps();
       lastAgentTimestamps[chatJid] = new Date().toISOString();
       setRouterState(
         'last_agent_timestamp',
@@ -523,7 +522,7 @@ const agentRuntime = createAgentRuntime({
       'Tool tried to send message - not implemented in Chat SDK mode',
     );
   },
-  getRegisteredAgents: () => ({}),
+  getRegisteredAgents: async () => ({}),
 });
 
 /**
@@ -534,7 +533,7 @@ async function executeCommand(
   command: string,
   sender?: string,
 ): Promise<string> {
-  const agent = resolveAgentForJid(chatJid);
+  const agent = await resolveAgentForJid(chatJid);
   if (!agent) {
     return `No agent configured for this channel. Please add a route in src/router.ts.`;
   }
@@ -542,20 +541,23 @@ async function executeCommand(
   const normalizedCommand = command.toLowerCase().replace(/^\//, '');
 
   if (normalizedCommand === 'clear') {
-    clearSession(chatJid);
+    await clearSession(chatJid);
     deleteSession(chatJid);
     return 'Session cleared. New conversation will start on next message.';
   } else if (normalizedCommand === 'status') {
-    const session = getSession(chatJid);
+    const session = await getSession(chatJid);
     if (!session) {
       return `Status: agent=${agent.id} session=none (no active session)`;
     }
     const modelProvider = agent.modelProvider || 'opencode-zen';
     const modelName = agent.modelName || 'kimi-k2.5';
-    const messageCount = getSessionMessageCount(chatJid, session.sessionId);
-    const tokenCount = getSessionTokenCount(chatJid, session.sessionId);
+    const messageCount = await getSessionMessageCount(
+      chatJid,
+      session.sessionId,
+    );
+    const tokenCount = await getSessionTokenCount(chatJid, session.sessionId);
     const lastTs =
-      getSessionLastTimestamp(chatJid, session.sessionId) || 'none';
+      (await getSessionLastTimestamp(chatJid, session.sessionId)) || 'none';
     return `Status: agent=${agent.id} session=${session.sessionId} model=${modelProvider}/${modelName} messages=${messageCount} tokens=${tokenCount} last=${lastTs}`;
   } else if (normalizedCommand === 'chatid') {
     const threadId = jidToThreadId(chatJid);
@@ -604,22 +606,15 @@ Add this to your \`ROUTES\` in \`src/router.ts\`:
  * Create and configure the Chat SDK bot
  */
 export async function createChatSdkBot(): Promise<Chat> {
-  // Initialize database
-  initDatabase();
-  logger.info('Database initialized');
-
   // Create SQLite state adapter
   stateAdapter = createSQLiteState(path.join(DATA_DIR, 'nanoclaw.db'));
   await stateAdapter.connect();
 
   // Create Chat SDK bot
   const bot = new Chat({
-    userName: ASSISTANT_NAME.toLowerCase(),
+    userName: process.env.ASSISTANT_NAME ?? 'Andy'.toLowerCase(),
     adapters: {
       discord: createDiscordAdapter({
-        botToken: DISCORD_BOT_TOKEN,
-        publicKey: DISCORD_PUBLIC_KEY,
-        applicationId: DISCORD_APPLICATION_ID,
         logger: new PinoLoggerAdapter(logger),
       }),
     },
@@ -633,7 +628,7 @@ export async function createChatSdkBot(): Promise<Chat> {
       'incoming onNewMention',
     );
 
-    const agent = resolveAgentForJid(thread.id);
+    const agent = await resolveAgentForJid(thread.id);
 
     if (!agent) {
       logger.info(
@@ -685,7 +680,7 @@ export async function createChatSdkBot(): Promise<Chat> {
     );
 
     // Run agent
-    const sessionId = ensureSessionForThread(thread.id);
+    const sessionId = await ensureSessionForThread(thread.id);
     await runAgent(thread.id, agent, content, sessionId, thread, message.id);
 
     logger.info(
@@ -696,7 +691,7 @@ export async function createChatSdkBot(): Promise<Chat> {
 
   // Handle subscribed messages (follow-ups in same thread)
   bot.onSubscribedMessage(async (thread, message) => {
-    const agent = resolveAgentForJid(thread.id);
+    const agent = await resolveAgentForJid(thread.id);
 
     if (!agent) {
       return;
@@ -758,7 +753,7 @@ export async function createChatSdkBot(): Promise<Chat> {
     );
 
     // Run agent
-    const sessionId = ensureSessionForThread(thread.id);
+    const sessionId = await ensureSessionForThread(thread.id);
     await runAgent(thread.id, agent, content, sessionId, thread, message.id);
 
     logger.info(
@@ -800,7 +795,7 @@ export async function createChatSdkBot(): Promise<Chat> {
       return;
     }
 
-    const agent = resolveAgentForJid(thread.id);
+    const agent = await resolveAgentForJid(thread.id);
 
     if (!agent) {
       logger.info(
@@ -852,7 +847,7 @@ export async function createChatSdkBot(): Promise<Chat> {
     );
 
     // Run agent
-    const sessionId = ensureSessionForThread(thread.id);
+    const sessionId = await ensureSessionForThread(thread.id);
 
     await runAgent(thread.id, agent, content, sessionId, thread, message.id);
 
