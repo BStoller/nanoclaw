@@ -88,7 +88,9 @@ async function createOrUpdateAgent(
   };
 }
 
-function formatTaskList(tasks: ReturnType<typeof getAllTasks>): string {
+function formatTaskList(
+  tasks: Awaited<ReturnType<typeof getAllTasks>>,
+): string {
   return tasks
     .map(
       (t) =>
@@ -111,7 +113,7 @@ function formatAvailableModels(): string {
     .join('\n');
 }
 
-function scheduleTask(
+async function scheduleTask(
   deps: NanoClawDeps,
   ctx: NanoClawContext,
   args: {
@@ -121,7 +123,7 @@ function scheduleTask(
     context_mode?: 'group' | 'isolated';
     target_jid?: string;
   },
-): { ok: boolean; message: string; normalizedScheduleValue?: string } {
+): Promise<{ ok: boolean; message: string; normalizedScheduleValue?: string }> {
   let normalizedScheduleValue = args.schedule_value;
 
   if (args.schedule_type === 'cron') {
@@ -185,7 +187,7 @@ function scheduleTask(
     ctx.isMain && args.target_jid ? args.target_jid : ctx.chatJid;
 
   // Check that target JID has a route
-  const targetAgentId = resolveAgentId(targetJid);
+  const targetAgentId = await resolveAgentId(targetJid);
   if (!targetAgentId) {
     return {
       ok: false,
@@ -276,7 +278,7 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
         context_mode?: 'group' | 'isolated';
         target_jid?: string;
       }) => {
-        const result = scheduleTask(deps, ctx, input);
+        const result = await scheduleTask(deps, ctx, input);
         if (!result.ok) {
           return { error: result.message };
         }
@@ -288,7 +290,7 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
         "List scheduled tasks. From main: shows all tasks. From other agents: shows only that agent's tasks.",
       inputSchema: z.object({}).optional(),
       execute: async () => {
-        const allTasks = getAllTasks();
+        const allTasks = await getAllTasks();
         const tasks = ctx.isMain
           ? allTasks
           : allTasks.filter((t) => t.agent_id === ctx.agentId);
@@ -302,7 +304,7 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
       description: 'Pause a scheduled task.',
       inputSchema: z.object({ task_id: z.string().describe('Task ID') }),
       execute: async (input: { task_id: string }) => {
-        const task = getTaskById(input.task_id);
+        const task = await getTaskById(input.task_id);
         if (!task) {
           return { error: 'Task not found.' };
         }
@@ -317,7 +319,7 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
       description: 'Resume a scheduled task.',
       inputSchema: z.object({ task_id: z.string().describe('Task ID') }),
       execute: async (input: { task_id: string }) => {
-        const task = getTaskById(input.task_id);
+        const task = await getTaskById(input.task_id);
         if (!task) {
           return { error: 'Task not found.' };
         }
@@ -332,7 +334,7 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
       description: 'Cancel and delete a scheduled task.',
       inputSchema: z.object({ task_id: z.string().describe('Task ID') }),
       execute: async (input: { task_id: string }) => {
-        const task = getTaskById(input.task_id);
+        const task = await getTaskById(input.task_id);
         if (!task) {
           return { error: 'Task not found.' };
         }
@@ -424,7 +426,7 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
         }
 
         // Verify agent exists
-        const agents = getAllAgents();
+        const agents = await getAllAgents();
         if (!agents[input.agent_id]) {
           return { error: `Agent "${input.agent_id}" not found.` };
         }
@@ -441,7 +443,7 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
       description: 'List all registered agents.',
       inputSchema: z.object({}).optional(),
       execute: async () => {
-        const agents = getAllAgents();
+        const agents = await getAllAgents();
         const agentList = Object.values(agents)
           .map((a) => `- ${a.id}: ${a.name} (trigger: ${a.trigger})`)
           .join('\n');

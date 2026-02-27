@@ -74,7 +74,7 @@ export interface AvailableGroup {
 
 export interface AgentRuntimeDeps {
   sendMessage: (jid: string, text: string, sender?: string) => Promise<void>;
-  getRegisteredAgents: () => Record<string, Agent>;
+  getRegisteredAgents: () => Promise<Record<string, Agent>>;
 }
 
 export interface AgentRuntime {
@@ -307,7 +307,7 @@ async function runQuery(
   const model = createModel(config);
 
   const systemPrompt = buildSystemPrompt(input.agentId, input.isMain);
-  const routeInfo = getRouteInfo(input.chatJid);
+  const routeInfo = await getRouteInfo(input.chatJid);
   const routeContext = routeInfo
     ? `You are operating in the conversation "${routeInfo.threadId}" with agent "${routeInfo.agentId}".`
     : `You are operating in the conversation "${input.chatJid}" with agent "${input.agentId}".`;

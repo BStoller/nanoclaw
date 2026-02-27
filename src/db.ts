@@ -113,8 +113,8 @@ export interface ChatInfo {
 /**
  * Get all known chats, ordered by most recent activity.
  */
-export function getAllChats(): ChatInfo[] {
-  const rows = db
+export async function getAllChats(): Promise<ChatInfo[]> {
+  const rows = await db
     .select({
       jid: schema.chats.jid,
       name: schema.chats.name,
@@ -138,8 +138,8 @@ export function getAllChats(): ChatInfo[] {
 /**
  * Get timestamp of last group metadata sync.
  */
-export function getLastGroupSync(): string | null {
-  const row = db
+export async function getLastGroupSync(): Promise<string | null> {
+  const row = await db
     .select({ last_message_time: schema.chats.lastMessageTime })
     .from(schema.chats)
     .where(eq(schema.chats.jid, '__group_sync__'))
@@ -233,14 +233,14 @@ export function storeMessageDirect(msg: {
     .run();
 }
 
-export function getNewMessages(
+export async function getNewMessages(
   jids: string[],
   lastTimestamp: string,
   botPrefix: string,
-): { messages: NewMessage[]; newTimestamp: string } {
+): Promise<{ messages: NewMessage[]; newTimestamp: string }> {
   if (jids.length === 0) return { messages: [], newTimestamp: lastTimestamp };
 
-  const rows = db
+  const rows = await db
     .select({
       id: schema.messages.id,
       chat_jid: schema.messages.chatJid,
@@ -283,11 +283,11 @@ export function getNewMessages(
   };
 }
 
-export function getNewMessagesAll(
+export async function getNewMessagesAll(
   lastTimestamp: string,
   botPrefix: string,
-): { messages: NewMessage[]; newTimestamp: string } {
-  const rows = db
+): Promise<{ messages: NewMessage[]; newTimestamp: string }> {
+  const rows = await db
     .select({
       id: schema.messages.id,
       chat_jid: schema.messages.chatJid,
@@ -329,12 +329,12 @@ export function getNewMessagesAll(
   };
 }
 
-export function getMessagesSince(
+export async function getMessagesSince(
   chatJid: string,
   sinceTimestamp: string,
   botPrefix: string,
-): NewMessage[] {
-  const rows = db
+): Promise<NewMessage[]> {
+  const rows = await db
     .select({
       id: schema.messages.id,
       chat_jid: schema.messages.chatJid,
@@ -391,8 +391,10 @@ export function createTask(
     .run();
 }
 
-export function getTaskById(id: string): ScheduledTask | undefined {
-  const row = db
+export async function getTaskById(
+  id: string,
+): Promise<ScheduledTask | undefined> {
+  const row = await db
     .select()
     .from(schema.scheduledTasks)
     .where(eq(schema.scheduledTasks.id, id))
@@ -406,19 +408,21 @@ export function getTaskById(id: string): ScheduledTask | undefined {
     chat_jid: row.chatJid,
     thread_id: row.threadId ?? undefined,
     prompt: row.prompt,
-    schedule_type: row.scheduleType,
+    schedule_type: row.scheduleType as 'cron' | 'interval' | 'once',
     schedule_value: row.scheduleValue,
-    context_mode: row.contextMode ?? 'isolated',
-    next_run: row.nextRun ?? undefined,
-    last_run: row.lastRun ?? undefined,
-    last_result: row.lastResult ?? undefined,
-    status: row.status as 'active' | 'completed' | 'error',
+    context_mode: (row.contextMode ?? 'isolated') as 'group' | 'isolated',
+    next_run: row.nextRun ?? null,
+    last_run: row.lastRun ?? null,
+    last_result: row.lastResult ?? null,
+    status: row.status as 'active' | 'paused' | 'completed',
     created_at: row.createdAt,
   };
 }
 
-export function getTasksForAgent(agentId: string): ScheduledTask[] {
-  const rows = db
+export async function getTasksForAgent(
+  agentId: string,
+): Promise<ScheduledTask[]> {
+  const rows = await db
     .select()
     .from(schema.scheduledTasks)
     .where(eq(schema.scheduledTasks.agentId, agentId))
@@ -431,19 +435,19 @@ export function getTasksForAgent(agentId: string): ScheduledTask[] {
     chat_jid: row.chatJid,
     thread_id: row.threadId ?? undefined,
     prompt: row.prompt,
-    schedule_type: row.scheduleType,
+    schedule_type: row.scheduleType as 'cron' | 'interval' | 'once',
     schedule_value: row.scheduleValue,
-    context_mode: row.contextMode ?? 'isolated',
-    next_run: row.nextRun ?? undefined,
-    last_run: row.lastRun ?? undefined,
-    last_result: row.lastResult ?? undefined,
-    status: row.status as 'active' | 'completed' | 'error',
+    context_mode: (row.contextMode ?? 'isolated') as 'group' | 'isolated',
+    next_run: row.nextRun ?? null,
+    last_run: row.lastRun ?? null,
+    last_result: row.lastResult ?? null,
+    status: row.status as 'active' | 'paused' | 'completed',
     created_at: row.createdAt,
   }));
 }
 
-export function getAllTasks(): ScheduledTask[] {
-  const rows = db
+export async function getAllTasks(): Promise<ScheduledTask[]> {
+  const rows = await db
     .select()
     .from(schema.scheduledTasks)
     .orderBy(desc(schema.scheduledTasks.createdAt))
@@ -455,13 +459,13 @@ export function getAllTasks(): ScheduledTask[] {
     chat_jid: row.chatJid,
     thread_id: row.threadId ?? undefined,
     prompt: row.prompt,
-    schedule_type: row.scheduleType,
+    schedule_type: row.scheduleType as 'cron' | 'interval' | 'once',
     schedule_value: row.scheduleValue,
-    context_mode: row.contextMode ?? 'isolated',
-    next_run: row.nextRun ?? undefined,
-    last_run: row.lastRun ?? undefined,
-    last_result: row.lastResult ?? undefined,
-    status: row.status as 'active' | 'completed' | 'error',
+    context_mode: (row.contextMode ?? 'isolated') as 'group' | 'isolated',
+    next_run: row.nextRun ?? null,
+    last_run: row.lastRun ?? null,
+    last_result: row.lastResult ?? null,
+    status: row.status as 'active' | 'paused' | 'completed',
     created_at: row.createdAt,
   }));
 }
@@ -502,10 +506,10 @@ export function deleteTask(id: string): void {
     .run();
 }
 
-export function getDueTasks(): ScheduledTask[] {
+export async function getDueTasks(): Promise<ScheduledTask[]> {
   const now = new Date().toISOString();
 
-  const rows = db
+  const rows = await db
     .select()
     .from(schema.scheduledTasks)
     .where(
@@ -524,13 +528,13 @@ export function getDueTasks(): ScheduledTask[] {
     chat_jid: row.chatJid,
     thread_id: row.threadId ?? undefined,
     prompt: row.prompt,
-    schedule_type: row.scheduleType,
+    schedule_type: row.scheduleType as 'cron' | 'interval' | 'once',
     schedule_value: row.scheduleValue,
-    context_mode: row.contextMode ?? 'isolated',
-    next_run: row.nextRun ?? undefined,
-    last_run: row.lastRun ?? undefined,
-    last_result: row.lastResult ?? undefined,
-    status: row.status as 'active' | 'completed' | 'error',
+    context_mode: (row.contextMode ?? 'isolated') as 'group' | 'isolated',
+    next_run: row.nextRun ?? null,
+    last_run: row.lastRun ?? null,
+    last_result: row.lastResult ?? null,
+    status: row.status as 'active' | 'paused' | 'completed',
     created_at: row.createdAt,
   }));
 }
@@ -568,8 +572,8 @@ export function logTaskRun(log: TaskRunLog): void {
 
 // --- Router state accessors ---
 
-export function getRouterState(key: string): string | undefined {
-  const row = db
+export async function getRouterState(key: string): Promise<string | undefined> {
+  const row = await db
     .select({ value: schema.routerState.value })
     .from(schema.routerState)
     .where(eq(schema.routerState.key, key))
@@ -589,10 +593,10 @@ export function setRouterState(key: string, value: string): void {
 
 // --- Session accessors (JID-based) ---
 
-export function getSession(
+export async function getSession(
   jid: string,
-): { agentId: string; sessionId: string } | undefined {
-  const row = db
+): Promise<{ agentId: string; sessionId: string } | undefined> {
+  const row = await db
     .select({
       agent_id: schema.sessions.agentId,
       session_id: schema.sessions.sessionId,
@@ -623,11 +627,10 @@ export function deleteSession(jid: string): void {
   db.delete(schema.sessions).where(eq(schema.sessions.jid, jid)).run();
 }
 
-export function getAllSessions(): Record<
-  string,
-  { agentId: string; sessionId: string }
+export async function getAllSessions(): Promise<
+  Record<string, { agentId: string; sessionId: string }>
 > {
-  const rows = db
+  const rows = await db
     .select({
       jid: schema.sessions.jid,
       agent_id: schema.sessions.agentId,
@@ -645,8 +648,8 @@ export function getAllSessions(): Record<
 
 // --- Agent accessors (replacing registered_groups) ---
 
-export function getAgent(id: string): Agent | undefined {
-  const row = db
+export async function getAgent(id: string): Promise<Agent | undefined> {
+  const row = await db
     .select()
     .from(schema.agents)
     .where(eq(schema.agents.id, id))
@@ -698,8 +701,8 @@ export function setAgent(id: string, agent: Agent): void {
     .run();
 }
 
-export function getAllAgents(): Record<string, Agent> {
-  const rows = db.select().from(schema.agents).all();
+export async function getAllAgents(): Promise<Record<string, Agent>> {
+  const rows = await db.select().from(schema.agents).all();
 
   const result: Record<string, Agent> = {};
   for (const row of rows) {
@@ -720,8 +723,8 @@ export function getAllAgents(): Record<string, Agent> {
 
 // --- Routes accessors ---
 
-export function getRoute(jid: string): string | undefined {
-  const row = db
+export async function getRoute(jid: string): Promise<string | undefined> {
+  const row = await db
     .select({ agent_id: schema.routes.agentId })
     .from(schema.routes)
     .where(eq(schema.routes.threadId, jid))
@@ -747,8 +750,8 @@ export function deleteRoute(threadId: string): void {
   db.delete(schema.routes).where(eq(schema.routes.threadId, threadId)).run();
 }
 
-export function getAllRoutes(): Record<string, string> {
-  const rows = db
+export async function getAllRoutes(): Promise<Record<string, string>> {
+  const rows = await db
     .select({
       thread_id: schema.routes.threadId,
       agent_id: schema.routes.agentId,
@@ -765,9 +768,9 @@ export function getAllRoutes(): Record<string, string> {
 
 // --- Legacy migration helpers (for backward compatibility) ---
 
-export function getAllRegisteredGroups(): Record<string, Agent> {
+export async function getAllRegisteredGroups(): Promise<Record<string, Agent>> {
   // Alias for getAllAgents during migration
-  return getAllAgents();
+  return await getAllAgents();
 }
 
 export function setRegisteredGroup(jid: string, group: Agent): void {
@@ -775,12 +778,11 @@ export function setRegisteredGroup(jid: string, group: Agent): void {
   setAgent(group.folder, { ...group, id: group.folder });
 }
 
-export function getAllRegisteredGroupsLegacy(): Record<
-  string,
-  Agent & { jid: string }
+export async function getAllRegisteredGroupsLegacy(): Promise<
+  Record<string, Agent & { jid: string }>
 > {
   // For migration purposes - return agents with their JIDs
-  const agents = getAllAgents();
+  const agents = await getAllAgents();
   const result: Record<string, Agent & { jid: string }> = {};
   for (const [id, agent] of Object.entries(agents)) {
     result[id] = { ...agent, jid: id };
@@ -864,11 +866,11 @@ export function storeAttachment(
     .run();
 }
 
-export function getAttachmentsForMessage(
+export async function getAttachmentsForMessage(
   messageId: string,
   chatJid: string,
-): Attachment[] {
-  const rows = db
+): Promise<Attachment[]> {
+  const rows = await db
     .select({
       id: schema.attachments.id,
       filename: schema.attachments.filename,

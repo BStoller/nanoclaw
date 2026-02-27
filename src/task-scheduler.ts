@@ -21,8 +21,8 @@ import { Agent, ScheduledTask } from './types.js';
 import { isNoReply } from './router.js';
 
 export interface SchedulerDependencies {
-  agents: () => Record<string, Agent>;
-  getSessions: () => Record<string, string>;
+  agents: () => Promise<Record<string, Agent>>;
+  getSessions: () => Promise<Record<string, string>>;
   runAgent: (input: AgentInput) => Promise<AgentOutput>;
   sendMessage: (jid: string, text: string) => Promise<void>;
 }
@@ -38,7 +38,7 @@ async function runTask(
     'Running scheduled task',
   );
 
-  const agents = deps.agents();
+  const agents = await deps.agents();
   const agent = agents[task.agent_id];
 
   if (!agent) {
@@ -63,7 +63,7 @@ async function runTask(
   let error: string | null = null;
 
   // For group context mode, use the thread's current session
-  const sessions = deps.getSessions();
+  const sessions = await deps.getSessions();
   // Use thread_id if available (new format), otherwise fall back to chat_jid (legacy)
   const threadId = task.thread_id || task.chat_jid;
   const sessionId =
@@ -148,14 +148,14 @@ export function startSchedulerLoop(deps: SchedulerDependencies): void {
   const loop = async () => {
     try {
       logger.debug('Scheduler loop iteration starting');
-      const dueTasks = getDueTasks();
+      const dueTasks = await getDueTasks();
       if (dueTasks.length > 0) {
         logger.info({ count: dueTasks.length }, 'Found due tasks');
       }
 
       for (const task of dueTasks) {
         // Re-check task status in case it was paused/cancelled
-        const currentTask = getTaskById(task.id);
+        const currentTask = await getTaskById(task.id);
         if (!currentTask || currentTask.status !== 'active') {
           continue;
         }

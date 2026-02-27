@@ -52,7 +52,7 @@ const agentRuntime = createAgentRuntime({
       logger.error({ jid, err }, 'Failed to send message from agent runtime');
     }
   },
-  getRegisteredAgents: () => getAllAgents(),
+  getRegisteredAgents: async () => await getAllAgents(),
 });
 
 /**
@@ -69,10 +69,10 @@ async function main(): Promise<void> {
 
   // Start scheduler loop for background tasks
   startSchedulerLoop({
-    agents: () => getAllAgents(),
-    getSessions: () => {
+    agents: async () => await getAllAgents(),
+    getSessions: async () => {
       const sessions: Record<string, string> = {};
-      const dbSessions = getAllSessions();
+      const dbSessions = await getAllSessions();
       for (const [jid, data] of Object.entries(dbSessions)) {
         sessions[jid] = data.sessionId;
       }
