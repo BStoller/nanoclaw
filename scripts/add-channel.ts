@@ -1,4 +1,4 @@
-import { initDatabase, setRoute, getAgent, setAgent } from '../src/db.js';
+import { setRoute, getAgent, setAgent } from '../src/db.js';
 import { logger } from '../src/logger.js';
 
 const args = process.argv.slice(2);
@@ -19,11 +19,8 @@ if (args.length < 1) {
 const threadId = args[0];
 const agentName = args[1] || 'main';
 
-// Initialize database
-initDatabase();
-
 // Get or create the agent
-let agent = getAgent(agentName);
+let agent = await getAgent(agentName);
 if (!agent) {
   if (agentName === 'main') {
     // Create default main agent
@@ -39,7 +36,7 @@ if (!agent) {
       modelName: 'kimi-k2.5',
       isMain: true,
     });
-    agent = getAgent('main');
+    agent = await getAgent('main');
     logger.info('Default "main" agent created');
   } else {
     logger.error(`Agent "${agentName}" not found. Please create it first.`);

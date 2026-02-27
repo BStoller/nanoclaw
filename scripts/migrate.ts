@@ -30,7 +30,7 @@ export async function runMigrationsOnDb(
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   const sqlite = createClient({
-    url: 'libsql://' + dbPath,
+    url: 'file:' + dbPath,
   });
 
   const db = drizzle(sqlite, { schema });
@@ -49,9 +49,10 @@ export async function runMigrationsOnDb(
     }
   } catch (error) {
     logger.error(
-      { db: dbName, error: (error as Error).message },
+      { db: dbName, err: JSON.stringify(error, Object.keys(error as any)) },
       'Migration failed',
     );
+    throw error;
   } finally {
     sqlite.close();
   }
@@ -138,7 +139,10 @@ export async function runMigrations(): Promise<void> {
 
     logger.info('All migrations complete');
   } catch (error) {
-    logger.fatal({ error: (error as Error).message }, 'Migration failed');
+    logger.error(
+      { err: JSON.stringify(error, Object.keys(error as any)) },
+      'Migration failed',
+    );
     throw error;
   }
 }
