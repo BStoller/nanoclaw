@@ -1,10 +1,10 @@
-import {
-  getDb,
-  loadMessages,
-  markMessageCompacted,
-} from '../agent-runner/session-store.js';
+import { eq, and, sql } from 'drizzle-orm';
+import { getSessionDb } from '../db/sessions/client.js';
+import { conversationHistory } from '../db/sessions/schema.js';
 import { logger } from '../logger.js';
 import { estimateTokens } from './token.js';
+import path from 'path';
+import { getSessionPath } from '../router.js';
 
 // Thresholds (from opencode)
 const PRUNE_MINIMUM = 20_000; // Must exceed this to actually prune
@@ -18,39 +18,43 @@ export interface PruneResult {
   protectedTurns: number; // Number of user turns protected
 }
 
+function getSessionDbPath(jid: string): string {
+  const sessionDir = getSessionPath(jid);
+  return path.join(sessionDir, 'conversation.db');
+}
+
 /**
  * Prune old tool outputs from the conversation.
  * Walks backwards through history, protecting recent turns.
  * When a tool result is pruned, its corresponding tool call is also excluded at load time.
  */
-export function pruneToolOutputs(jid: string, sessionId: string): PruneResult {
+export async function pruneToolOutputs(
+  jid: string,
+  sessionId: string,
+): Promise<PruneResult> {
   logger.debug({ jid, sessionId }, 'Starting tool output pruning');
   const startTime = Date.now();
 
-  const db = getDb(jid);
+  const dbPath = getSessionDbPath(jid);
+  const db = await getSessionDb(dbPath);
+
   let total = 0;
   let pruned = 0;
   const toPrune: number[] = [];
   let turns = 0;
 
   // Get all messages including compacted ones
-  const rows = db
-    .prepare(
-      `SELECT id, role, tool_results, is_compacted, compacted_at 
-       FROM conversation_history
-       WHERE session_id = ?
-       ORDER BY id DESC`,
-    )
-    .all(sessionId) as Array<{
-    id: number;
-    role: string;
-    tool_results: string | null;
-    is_compacted: number;
-    compacted_at: string | null;
-  }>;
-
-  // Get user message IDs for turn counting
-  const userIds = loadMessages(jid, sessionId).filter((x) => x.role == 'user');
+  const rows = await db
+    .select({
+      id: conversationHistory.id,
+      role: conversationHistory.role,
+      toolResults: conversationHistory.toolResults,
+      isCompacted: conversationHistory.isCompacted,
+      compactedAt: conversationHistory.compactedAt,
+    })
+    .from(conversationHistory)
+    .where(eq(conversationHistory.sessionId, sessionId))
+    .orderBy(sql`${conversationHistory.id} DESC`);
 
   // Walk backwards through messages
   loop: for (const row of rows) {
@@ -63,15 +67,15 @@ export function pruneToolOutputs(jid: string, sessionId: string): PruneResult {
     }
 
     // Stop if we hit an already compacted message
-    if (row.is_compacted && row.compacted_at) {
+    if (row.isCompacted && row.compactedAt) {
       break loop;
     }
 
     // Process tool results
-    if (row.role === 'tool' && row.tool_results) {
+    if (row.role === 'tool' && row.toolResults) {
       try {
         // Check if this is a protected tool
-        const toolResults = JSON.parse(row.tool_results) as Array<{
+        const toolResults = JSON.parse(row.toolResults) as Array<{
           toolName: string;
         }>;
         const isProtected = toolResults.some((result) =>
@@ -82,7 +86,7 @@ export function pruneToolOutputs(jid: string, sessionId: string): PruneResult {
         }
 
         // Estimate tokens in this tool result
-        const estimate = estimateTokens(row.tool_results);
+        const estimate = estimateTokens(row.toolResults);
         total += estimate;
 
         // If we've exceeded the protection threshold, mark for pruning
@@ -98,8 +102,20 @@ export function pruneToolOutputs(jid: string, sessionId: string): PruneResult {
 
   // Only prune if we exceeded the minimum threshold
   if (pruned > PRUNE_MINIMUM && toPrune.length > 0) {
+    const now = new Date().toISOString();
     for (const messageId of toPrune) {
-      markMessageCompacted(jid, sessionId, messageId);
+      await db
+        .update(conversationHistory)
+        .set({
+          isCompacted: true,
+          compactedAt: now,
+        })
+        .where(
+          and(
+            eq(conversationHistory.sessionId, sessionId),
+            eq(conversationHistory.id, messageId),
+          ),
+        );
     }
     logger.info(
       {
@@ -124,25 +140,34 @@ export function pruneToolOutputs(jid: string, sessionId: string): PruneResult {
 /**
  * Check if pruning is needed based on estimated token count.
  */
-export function shouldPrune(
+export async function shouldPrune(
   jid: string,
   sessionId: string,
   threshold: number = PRUNE_PROTECT,
-): boolean {
-  const db = getDb(jid);
+): Promise<boolean> {
+  const dbPath = getSessionDbPath(jid);
+  const db = await getSessionDb(dbPath);
 
-  const rows = db
-    .prepare(
-      `SELECT tool_results FROM conversation_history
-       WHERE session_id = ? AND role = 'tool' AND is_compacted = FALSE`,
-    )
-    .all(sessionId) as Array<{ tool_results: string }>;
+  const rows = await db
+    .select({
+      toolResults: conversationHistory.toolResults,
+    })
+    .from(conversationHistory)
+    .where(
+      and(
+        eq(conversationHistory.sessionId, sessionId),
+        eq(conversationHistory.role, 'tool'),
+        sql`(${conversationHistory.isCompacted} IS NULL OR ${conversationHistory.isCompacted} = FALSE)`,
+      ),
+    );
 
   let totalTokens = 0;
   for (const row of rows) {
-    totalTokens += estimateTokens(row.tool_results);
-    if (totalTokens >= threshold) {
-      return true;
+    if (row.toolResults) {
+      totalTokens += estimateTokens(row.toolResults);
+      if (totalTokens >= threshold) {
+        return true;
+      }
     }
   }
 
