@@ -8,12 +8,13 @@ import {
 } from './tools/nanoclaw.js';
 import { SendAttachment } from './tools/send-attachment.js';
 import { WorkspaceContext } from './workspace-paths.js';
+import { wrapToolRegistryWithTruncation } from './tool-wrapper.js';
 
-export function createToolRegistry(options: {
+export function createBaseTools(options: {
   workspace: WorkspaceContext;
   nanoclawContext: NanoClawContext;
   nanoclawDeps: NanoClawDeps;
-}): Record<string, unknown> {
+}) {
   return {
     Bash: createBashTool(options.workspace),
     ...createFsTools(options.workspace),
@@ -21,4 +22,14 @@ export function createToolRegistry(options: {
     ...createNanoClawTools(options.nanoclawDeps, options.nanoclawContext),
     SendAttachment,
   };
+}
+
+export function createToolRegistry(options: {
+  workspace: WorkspaceContext;
+  nanoclawContext: NanoClawContext;
+  nanoclawDeps: NanoClawDeps;
+}) {
+  const tools = createBaseTools(options);
+
+  return wrapToolRegistryWithTruncation(tools);
 }

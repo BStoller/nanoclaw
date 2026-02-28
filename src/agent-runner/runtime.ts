@@ -28,9 +28,10 @@ import {
   getOrCreateSessionId,
   getSessionTokenCount,
   loadMessages,
-  replaceSessionMessages,
   saveMessage,
+  replaceSessionMessages,
 } from './session-store';
+import { truncateOutput } from '../context/truncate';
 import { getRouteInfo } from '../router';
 import {
   detectAndLoadImages,
@@ -274,6 +275,37 @@ function validateRequestedModel(input: AgentInput): void {
   throw new Error(
     `Invalid model selection: ${provider}:${modelName}. Available models: ${available}`,
   );
+}
+
+/**
+ * Truncate tool results within a message to prevent context overflow.
+ * This is called in-flight when messages come back from the AI SDK.
+ */
+function truncateToolResultsInMessage(message: ModelMessage): ModelMessage {
+  if (message.role !== 'tool' || !Array.isArray(message.content)) {
+    return message;
+  }
+
+  const truncatedContent = message.content.map((part) => {
+    if (isToolResultPart(part) && typeof part.output === 'string') {
+      const truncateResult = truncateOutput(part.output, {
+        maxLines: 500,
+        maxBytes: 100 * 1024, // 100KB
+        direction: 'head',
+      });
+
+      return {
+        ...part,
+        output: truncateResult.content,
+      } as unknown as ToolResultPart;
+    }
+    return part;
+  });
+
+  return {
+    ...message,
+    content: truncatedContent,
+  } as ModelMessage;
 }
 
 async function runQuery(
@@ -595,12 +627,18 @@ async function runQuery(
       !tokenAssigned && message.role === 'assistant' ? usageTokens : null;
     if (tokenCount != null) tokenAssigned = true;
 
-    saveMessage(input.chatJid, sessionId, message, tokenCount).catch((err) => {
-      logger.warn(
-        { jid: input.chatJid, sessionId, err },
-        'Failed to save message',
-      );
-    });
+    // Truncate tool results in-flight to prevent context overflow
+    // This happens BEFORE saving, so massive outputs don't bloat the context
+    const truncatedMessage = truncateToolResultsInMessage(message);
+
+    saveMessage(input.chatJid, sessionId, truncatedMessage, tokenCount).catch(
+      (err) => {
+        logger.warn(
+          { jid: input.chatJid, sessionId, err },
+          'Failed to save message',
+        );
+      },
+    );
   }
 
   const totalDuration = Date.now() - queryStartTime;

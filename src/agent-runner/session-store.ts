@@ -306,9 +306,29 @@ function deserializeMessage(row: {
 }): ModelMessage {
   if (row.role === 'tool') {
     const toolResults = normalizeToolResults(row.toolResults);
+
+    // Truncate tool results at load time to prevent context overflow
+    // This handles both new and existing messages in the database
+    const truncatedResults: ToolResultPart[] = toolResults.map((part) => {
+      if (isToolResultPart(part) && typeof part.output === 'string') {
+        // Truncate large outputs and save full version to disk
+        const truncateResult = truncateOutput(part.output, {
+          maxLines: 500,
+          maxBytes: 100 * 1024, // 100KB
+          direction: 'head',
+        });
+
+        return {
+          ...part,
+          output: truncateResult.content,
+        } as unknown as ToolResultPart;
+      }
+      return part;
+    });
+
     return {
       role: 'tool',
-      content: toolResults,
+      content: truncatedResults,
     };
   }
 
