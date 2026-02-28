@@ -89,19 +89,28 @@ export async function loadImageAsBase64(
 /**
  * Detect and load all images from prompt media notes
  * Returns array of image data ready for model injection
+ * Duplicate image paths are automatically deduplicated.
  */
 export async function detectAndLoadImages(
   prompt: string,
 ): Promise<ImageData[]> {
   const imagePaths = extractImagePathsFromMediaNotes(prompt);
 
-  const images: ImageData[] = [];
+  // Deduplicate by path to avoid sending the same image multiple times
+  const uniquePaths = new Map<string, string>(); // path -> mimeType
   for (const { path, mimeType } of imagePaths) {
+    if (!uniquePaths.has(path)) {
+      uniquePaths.set(path, mimeType);
+    }
+  }
+
+  const images: ImageData[] = [];
+  for (const [filePath, mimeType] of uniquePaths.entries()) {
     try {
-      const imageData = await loadImageAsBase64(path, mimeType);
+      const imageData = await loadImageAsBase64(filePath, mimeType);
       images.push(imageData);
     } catch (err) {
-      console.warn(`Failed to load image ${path}:`, err);
+      console.warn(`Failed to load image ${filePath}:`, err);
     }
   }
 
