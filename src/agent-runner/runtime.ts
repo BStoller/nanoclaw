@@ -869,10 +869,15 @@ async function compactSession(
       content: `Summary of earlier conversation:\n${summaryText.trim()}`,
     };
 
-    // Replace messages: summary + recent (both soft compacted and recent)
+    // Filter out tool messages from recent to prevent context overflow
+    // Tool results in recent messages can be massive and cause the prompt to exceed limits
+    // The summary already captures what was done, so we don't need the full tool outputs
+    const filteredRecent = recent.filter((msg) => msg.role !== 'tool');
+
+    // Replace messages: summary + filtered recent (without tool messages)
     await replaceSessionMessages(input.chatJid, sessionId, [
       summaryMessage,
-      ...recent,
+      ...filteredRecent,
     ]);
 
     const totalDuration = Date.now() - compactionStart;
