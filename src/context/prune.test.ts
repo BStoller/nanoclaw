@@ -1349,3 +1349,201 @@ describe('compaction edge cases', () => {
     expect(rows[0].compacted_at).not.toBeNull();
   });
 });
+
+describe('loadMessages with compaction', () => {
+  let projectDir: string;
+  let sessionsDir: string;
+  let dbPath: string;
+  const sessionId = 'test-session-load';
+  const jid = 'test-load@example.com';
+  let originalCwd: string;
+
+  beforeEach(async () => {
+    originalCwd = process.cwd();
+    projectDir = createTempProjectDir();
+    process.chdir(projectDir);
+    sessionsDir = path.join(projectDir, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    mockConfig.SESSIONS_DIR = sessionsDir;
+    const sanitizedJid = jid.replace(/[:@]/g, '_');
+    const sessionDir = path.join(sessionsDir, sanitizedJid);
+    dbPath = path.join(sessionDir, 'conversation.db');
+  });
+
+  afterEach(() => {
+    closeAllSessionDbs();
+    process.chdir(originalCwd);
+    cleanup(projectDir);
+  });
+
+  it('loadMessages should exclude compacted tool messages', async () => {
+    const largeToolResult = createLargeToolResult('read_file', 25000);
+
+    await setupTestDb(dbPath, [
+      // Message 1 - will be compacted (simulating tool pruning)
+      {
+        sessionId,
+        role: 'user',
+        content: 'Q1',
+        createdAt: '2024-01-01T00:00:00Z',
+      },
+      {
+        sessionId,
+        role: 'tool',
+        toolResults: largeToolResult,
+        createdAt: '2024-01-01T00:00:01Z',
+        isCompacted: true,
+        compactedAt: '2024-01-01T00:00:02Z',
+      },
+      // Message 2 - not compacted
+      {
+        sessionId,
+        role: 'user',
+        content: 'Q2',
+        createdAt: '2024-01-01T00:00:03Z',
+      },
+      {
+        sessionId,
+        role: 'tool',
+        toolResults: largeToolResult,
+        createdAt: '2024-01-01T00:00:04Z',
+      },
+    ]);
+
+    // Import the real loadMessages function
+    const { loadMessages } = await import('../agent-runner/session-store.js');
+    const messages = await loadMessages(jid, sessionId);
+
+    // Should return 3 messages: Q1 user (not compacted) + Q2 user + Q2 tool
+    // Note: Tool pruning only marks tool messages as compacted, not user messages
+    expect(messages.length).toBe(3);
+    expect(messages[0].role).toBe('user');
+    expect(messages[0].content).toBe('Q1');
+    expect(messages[1].role).toBe('user');
+    expect(messages[1].content).toBe('Q2');
+    expect(messages[2].role).toBe('tool');
+    // Q2 tool should have tool results (not compacted)
+    expect(Array.isArray(messages[2].content)).toBe(true);
+    expect(messages[2].content.length).toBe(1);
+    const toolResult = messages[2].content[0] as { toolName: string };
+    expect(toolResult.toolName).toBe('read_file');
+  });
+
+  it('loadMessages should exclude isCompactedSummary messages', async () => {
+    const largeToolResult = createLargeToolResult('read_file', 25000);
+
+    await setupTestDb(dbPath, [
+      // Summary message - should be excluded
+      {
+        sessionId,
+        role: 'system',
+        content: 'Summary of conversation...',
+        createdAt: '2024-01-01T00:00:00Z',
+        isCompacted: true,
+        compactedAt: '2024-01-01T00:00:01Z',
+      },
+      // Recent messages
+      {
+        sessionId,
+        role: 'user',
+        content: 'Q1',
+        createdAt: '2024-01-01T00:00:02Z',
+      },
+      {
+        sessionId,
+        role: 'tool',
+        toolResults: largeToolResult,
+        createdAt: '2024-01-01T00:00:03Z',
+      },
+    ]);
+
+    // First mark one message as summary
+    const sqlite = new Database(dbPath);
+    sqlite.exec(`
+      UPDATE conversation_history 
+      SET is_compacted_summary = 1 
+      WHERE session_id = '${sessionId}' AND role = 'system'
+    `);
+    sqlite.close();
+    closeAllSessionDbs();
+
+    // Import the real loadMessages function
+    const { loadMessages } = await import('../agent-runner/session-store.js');
+    const messages = await loadMessages(jid, sessionId);
+
+    // Should exclude the summary message
+    expect(messages.length).toBe(2);
+    expect(messages.some((m: { role: string }) => m.role === 'system')).toBe(
+      false,
+    );
+  });
+
+  it('reproduces the issue: large tool results cause context overflow even after compaction', async () => {
+    // Simulate the real issue: massive tool results in recent messages
+    const massiveToolResult = createLargeToolResult('read_file', 100000); // 100K tokens = 400K chars
+    const normalToolResult = createLargeToolResult('read_file', 5000);
+
+    await setupTestDb(dbPath, [
+      // Older messages - would be summarized by compaction
+      {
+        sessionId,
+        role: 'user',
+        content: 'Q1',
+        createdAt: '2024-01-01T00:00:00Z',
+      },
+      {
+        sessionId,
+        role: 'tool',
+        toolResults: normalToolResult,
+        createdAt: '2024-01-01T00:00:01Z',
+        isCompacted: true,
+        compactedAt: '2024-01-01T00:00:02Z',
+      },
+      // Recent messages with MASSIVE tool result (this is the problem!)
+      {
+        sessionId,
+        role: 'user',
+        content: 'Q2',
+        createdAt: '2024-01-01T00:00:03Z',
+      },
+      {
+        sessionId,
+        role: 'tool',
+        toolResults: massiveToolResult,
+        createdAt: '2024-01-01T00:00:04Z',
+      },
+      // More recent messages
+      {
+        sessionId,
+        role: 'user',
+        content: 'Q3',
+        createdAt: '2024-01-01T00:00:05Z',
+      },
+    ]);
+
+    // Calculate total tokens that would be loaded
+    const sqlite = new Database(dbPath);
+    const rows = sqlite
+      .prepare(
+        `
+        SELECT 
+          COALESCE(LENGTH(content), 0) + COALESCE(LENGTH(tool_results), 0) as total_chars
+        FROM conversation_history 
+        WHERE session_id = ? AND (is_compacted = 0 OR is_compacted IS NULL)
+      `,
+      )
+      .all(sessionId) as Array<{ total_chars: number }>;
+    sqlite.close();
+
+    const totalChars = rows.reduce((sum, row) => sum + row.total_chars, 0);
+    const estimatedTokens = Math.ceil(totalChars / 4);
+
+    // The massive tool result alone is 100K tokens
+    // This demonstrates the issue: even after filtering out compacted messages,
+    // we still have ~100K tokens just from the one massive tool result
+    expect(estimatedTokens).toBeGreaterThan(80000); // Massive tool is 100K, we expect at least 80K after filtering
+
+    // The fix would be to also prune tool results in recent messages,
+    // or to use a smarter loading strategy that excludes tool_results from the context
+  });
+});

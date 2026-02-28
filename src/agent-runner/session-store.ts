@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
-import { eq, and, isNull, sql } from 'drizzle-orm';
+import { eq, and, or, isNull, sql } from 'drizzle-orm';
 import type {
   JSONValue,
   ModelMessage,
@@ -94,7 +94,19 @@ export async function loadMessages(
       toolResults: conversationHistory.toolResults,
     })
     .from(conversationHistory)
-    .where(eq(conversationHistory.sessionId, sessionId))
+    .where(
+      and(
+        eq(conversationHistory.sessionId, sessionId),
+        or(
+          eq(conversationHistory.isCompacted, false),
+          sql`${conversationHistory.isCompacted} IS NULL`,
+        ),
+        or(
+          eq(conversationHistory.isCompactedSummary, false),
+          sql`${conversationHistory.isCompactedSummary} IS NULL`,
+        ),
+      ),
+    )
     .orderBy(conversationHistory.id);
 
   return rows.map((row) => deserializeMessage(row));
