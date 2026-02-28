@@ -4,45 +4,62 @@ You can update yourself by running npm run update in ~/nanoclaw
 
 ## Understanding Your Codebase
 
-You are running inside the Nanoclaw codebase itself. Your source code is accessible by navigating up from your working directory to the main Nanoclaw folder (`/app`).
+You are running inside the Nanoclaw codebase itself. Your working directory is typically `/agents/{agentName}` within the overall project. To access the source code, navigate up two directories to reach the main Nanoclaw folder.
 
-### Directory Structure
+### Finding the Source Code
 
-- `/app/src/` - Core TypeScript source files (bot logic, database, routing, task scheduling)
-- `/app/agents/` - Agent configurations and workspaces (you are here)
-- `/app/skills-engine/` - Skill system implementation
-- `/app/scripts/` - Utility scripts for maintenance and updates
-- `/app/drizzle/` - Database migrations and schema
-- `/app/.claude/skills/` - Built-in skills (telegram, gmail, etc.)
+From your working directory, run:
+
+```
+bash: cd ../.. && pwd
+```
+
+This will show you the path to the main Nanoclaw folder. Use this path as the base for all file operations.
+
+### Directory Structure (relative to main folder)
+
+- `src/` - Core TypeScript source files (bot logic, database, routing, task scheduling)
+- `agents/` - Agent configurations and workspaces (you are here)
+- `skills-engine/` - Skill system implementation
+- `scripts/` - Utility scripts for maintenance and updates
+- `drizzle/` - Database migrations and schema
+- `.claude/skills/` - Built-in skills (telegram, gmail, etc.)
 
 ### How to Explore the Code
 
-Use these tools to understand the codebase:
+1. **First, find the base path:**
 
-1. **Glob patterns** - Find files by pattern:
-   - `glob "src/**/*.ts"` - All TypeScript files in src/
-   - `glob "**/*.md"` - All markdown documentation
+   ```
+   bash: cd ../.. && pwd
+   ```
 
-2. **Grep** - Search for specific patterns:
-   - `grep "function handleMessage"` - Find where functions are defined
-   - `grep "router.ts"` - Find files that reference the router
+   Store this path - you'll use it for all file references.
 
-3. **Read files** - View file contents:
-   - `read /app/src/index.ts` - Read the main entry point
-   - `read /app/src/router.ts` - Understand message routing logic
+2. **Glob patterns** - Find files by pattern (run from base directory or use full paths):
+   - `glob "src/**/*.ts" path="/path/to/nanoclaw"` - All TypeScript files
+   - `glob "**/*.md" path="/path/to/nanoclaw"` - All markdown documentation
 
-4. **Bash** - Run commands to explore:
-   - `ls -la /app/src/` - List source directory contents
-   - `find /app/src -name "*.ts" | head -20` - Find TypeScript files
+3. **Grep** - Search for specific patterns:
+   - `grep "function handleMessage" path="/path/to/nanoclaw"` - Find function definitions
+
+4. **Read files** - View file contents:
+   - `read /path/to/nanoclaw/src/index.ts` - Read the main entry point
+   - `read /path/to/nanoclaw/src/router.ts` - Understand message routing
+
+5. **Bash** - Run commands to explore:
+   - `ls -la ../..` - List main directory contents
+   - `find ../.. -name "*.ts" | head -20` - Find TypeScript files
 
 ### Key Files to Know
 
-- `/app/src/index.ts` - Main entry point and initialization
-- `/app/src/router.ts` - Message routing and command handling
-- `/app/src/chat-sdk-bot.ts` - Core bot implementation
-- `/app/src/task-scheduler.ts` - Background task management
-- `/app/src/db.ts` - Database operations
-- `/app/package.json` - Dependencies and scripts
+From the main Nanoclaw folder:
+
+- `src/index.ts` - Main entry point and initialization
+- `src/router.ts` - Message routing and command handling
+- `src/chat-sdk-bot.ts` - Core bot implementation
+- `src/task-scheduler.ts` - Background task management
+- `src/db.ts` - Database operations
+- `package.json` - Dependencies and scripts
 
 When you need to understand how something works, read the code directly. The code is the ground truth of how the system operates.
 
