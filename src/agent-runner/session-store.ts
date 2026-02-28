@@ -14,6 +14,7 @@ import { getSessionPath } from '../router.js';
 import { logger } from '../logger.js';
 import { getSessionDb, closeSessionDb } from '../db/sessions/client.js';
 import { conversationHistory } from '../db/sessions/schema.js';
+import { truncateOutput } from '../context/truncate.js';
 
 function getSessionDbPath(jid: string): string {
   const sessionDir = getSessionPath(jid);
@@ -264,8 +265,30 @@ function serializeMessage(message: ModelMessage): {
     role === 'assistant' && Array.isArray(message.content)
       ? serializeToolCalls(message.content)
       : null;
-  const toolResults =
-    role === 'tool' ? JSON.stringify(message.content ?? []) : null;
+
+  // For tool messages, truncate the output before saving to prevent DB bloat
+  let toolResults: string | null = null;
+  if (role === 'tool' && Array.isArray(message.content)) {
+    const truncatedContent = message.content.map((part) => {
+      if (isToolResultPart(part) && typeof part.output === 'string') {
+        // Truncate the tool output and save full version to disk
+        const truncateResult = truncateOutput(part.output, {
+          maxLines: 500,
+          maxBytes: 100 * 1024, // 100KB
+          direction: 'head',
+        });
+
+        return {
+          ...part,
+          output: truncateResult.content,
+        };
+      }
+      return part;
+    });
+    toolResults = JSON.stringify(truncatedContent);
+  } else if (role === 'tool') {
+    toolResults = JSON.stringify(message.content ?? []);
+  }
 
   return {
     role,

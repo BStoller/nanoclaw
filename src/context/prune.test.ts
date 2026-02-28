@@ -1546,4 +1546,42 @@ describe('loadMessages with compaction', () => {
     // The fix would be to also prune tool results in recent messages,
     // or to use a smarter loading strategy that excludes tool_results from the context
   });
+
+  it('truncates tool outputs and provides read instructions', async () => {
+    // Create a large tool output that would be truncated
+    const { truncateOutput } = await import('../context/truncate.js');
+
+    // Create a large output (600 lines = more than 500 line limit)
+    const largeOutput = Array.from(
+      { length: 600 },
+      (_, i) => `Line ${i + 1}: ${'x'.repeat(100)}`,
+    ).join('\n');
+
+    const result = truncateOutput(largeOutput, {
+      maxLines: 500,
+      maxBytes: 100 * 1024,
+      direction: 'head',
+    });
+
+    // Should be truncated
+    expect(result.truncated).toBe(true);
+    expect(result.outputPath).toBeDefined();
+
+    // The truncated content should include instructions
+    expect(result.content).toContain('head -200');
+    expect(result.content).toContain('tail -200');
+    expect(result.content).toContain('sed -n');
+    expect(result.content).toContain(
+      'The tool call succeeded but the output was truncated',
+    );
+
+    // Verify the full file was saved
+    expect(result.outputPath).toBeTruthy();
+    if (result.outputPath) {
+      expect(fs.existsSync(result.outputPath)).toBe(true);
+      const fullContent = fs.readFileSync(result.outputPath, 'utf-8');
+      expect(fullContent).toBe(largeOutput); // Full content should be saved
+      expect(fullContent.split('\n').length).toBe(600); // All 600 lines
+    }
+  });
 });

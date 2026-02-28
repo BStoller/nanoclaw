@@ -11,9 +11,9 @@ import { logger } from '../logger.js';
 const DATA_DIR = path.join(process.cwd(), 'data');
 const TOOL_OUTPUT_DIR = path.join(DATA_DIR, 'tool-output');
 
-// Default limits
-export const DEFAULT_MAX_LINES = 2000;
-export const DEFAULT_MAX_BYTES = 50 * 1024; // 50KB
+// Default limits - 200-500 lines as per user requirements
+export const DEFAULT_MAX_LINES = 500;
+export const DEFAULT_MAX_BYTES = 100 * 1024; // 100KB
 export const RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 export interface TruncateOptions {
@@ -130,7 +130,13 @@ export function truncateOutput(
   const unit = hitBytes ? 'bytes' : 'lines';
   const preview = out.join('\n');
 
-  const hint = `The tool call succeeded but the output was truncated. Full output saved to: ${outputPath}\nUse Grep to search the full content or Read with offset/limit to view specific sections.`;
+  const hint = `The tool call succeeded but the output was truncated. Full output saved to: ${outputPath}
+
+To read the full output, use one of these commands:
+  - Read first 200 lines: head -200 "${outputPath}"
+  - Read last 200 lines: tail -200 "${outputPath}"
+  - Read lines 201-400: sed -n '201,400p' "${outputPath}"
+  - Read entire file: cat "${outputPath}" (use with caution for large files)`;
 
   const content =
     direction === 'head'
