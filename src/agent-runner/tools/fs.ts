@@ -24,9 +24,16 @@ function resolvePath(
 }
 
 export function createFsTools(ctx: WorkspaceContext) {
+  type ReadToolResult =
+    | { error: string }
+    | { entries: string[] }
+    | { content: string; base64: string; mimeType: string; path: string }
+    | { content: string; totalLines: number; offset: number };
+
   return {
     Read: tool({
-      description: 'Read a file or directory from disk.',
+      description:
+        'Read a file or directory from disk. Use this to read images so that you can see what they are of',
       inputSchema: z.object({
         path: z.string().describe('File or directory path'),
         offset: z.number().int().optional().describe('Line offset (1-indexed)'),
@@ -36,13 +43,13 @@ export function createFsTools(ctx: WorkspaceContext) {
         path: string;
         offset?: number;
         limit?: number;
-      }) => {
+      }): Promise<ReadToolResult> => {
         const resolved = resolvePath(input.path, ctx, {
           allowGlobal: !ctx.isMain,
           allowProject: ctx.isMain,
         });
         if (!resolved.resolvedPath) {
-          return { error: resolved.error };
+          return { error: resolved.error ?? 'Failed to resolve path' };
         }
 
         const stat = fs.statSync(resolved.resolvedPath);
@@ -79,50 +86,42 @@ export function createFsTools(ctx: WorkspaceContext) {
           offset: offset + 1,
         };
       },
-      // Map tool result to AI SDK content parts - enables image support
-      experimental_toToolResultContent: (result) => {
-        // If the result has base64 image data, return as image content part
-        if (result.base64 && result.mimeType) {
-          return [
-            {
-              type: 'text',
-              text: result.content,
-            },
-            {
-              type: 'image',
-              data: result.base64,
-              mimeType: result.mimeType,
-            },
-          ];
+      toModelOutput: ({ output }) => {
+        if ('base64' in output) {
+          return {
+            type: 'content',
+            value: [
+              {
+                type: 'text',
+                text: output.content,
+              },
+              {
+                type: 'image-data',
+                data: output.base64,
+                mediaType: output.mimeType,
+              },
+            ],
+          };
         }
 
-        // For directories, return the entries as text
-        if (result.entries) {
-          return [
-            {
-              type: 'text',
-              text: result.entries.join('\n'),
-            },
-          ];
-        }
-
-        // For errors, return error text
-        if (result.error) {
-          return [
-            {
-              type: 'text',
-              text: `Error: ${result.error}`,
-            },
-          ];
-        }
-
-        // Default: return content as text
-        return [
-          {
+        if ('entries' in output) {
+          return {
             type: 'text',
-            text: result.content || '',
-          },
-        ];
+            value: output.entries.join('\n'),
+          };
+        }
+
+        if ('error' in output) {
+          return {
+            type: 'error-text',
+            value: output.error,
+          };
+        }
+
+        return {
+          type: 'text',
+          value: output.content,
+        };
       },
     }),
     Write: tool({

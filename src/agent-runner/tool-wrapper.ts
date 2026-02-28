@@ -50,7 +50,17 @@ function truncateObjectValues(
 
   if (typeof obj === 'object') {
     const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+    const source = obj as Record<string, unknown>;
+    const isImagePayload =
+      typeof source.mimeType === 'string' &&
+      source.mimeType.startsWith('image/');
+
+    for (const [key, value] of Object.entries(source)) {
+      if (isImagePayload && key === 'base64' && typeof value === 'string') {
+        result[key] = value;
+        continue;
+      }
+
       result[key] = truncateObjectValues(value, maxLines, maxBytes);
     }
     return result;

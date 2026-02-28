@@ -360,7 +360,7 @@ async function runQuery(
 
   // Check if model supports vision and inject images if available
   // Images from user attachments are detected via media notes in the prompt
-  // Images from tool reads are handled via experimental_toToolResultContent
+  // Images from tool reads are handled via the Read tool's toModelOutput
   let userContent:
     | string
     | Array<
@@ -430,8 +430,6 @@ async function runQuery(
 
   const streamStartTime = Date.now();
   let streamError: Error | null = null;
-
-  logger.debug({ msgs: messages }, 'messages being sent to the stream');
 
   try {
     // Wrap model with reasoning extraction middleware
