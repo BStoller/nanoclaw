@@ -2,7 +2,6 @@ export interface ModelConfig {
   provider: string;
   modelName: string;
   contextWindow: number;
-  maxOutputTokens: number;
   compactionThresholdPercent: number;
   supportsVision: boolean;
   isOpenAIResponseFormat?: boolean;
@@ -12,7 +11,6 @@ const DEFAULT_MODEL_CONFIG: ModelConfig = {
   provider: 'opencode-zen',
   modelName: 'kimi-k2.5',
   contextWindow: 200000,
-  maxOutputTokens: 8192,
   compactionThresholdPercent: 60,
   supportsVision: true,
 };
@@ -26,7 +24,6 @@ const MODEL_CONFIGS: Record<string, ModelConfig> = {
     modelName: 'gpt-5.3-codex',
     isOpenAIResponseFormat: true,
     contextWindow: 400000,
-    maxOutputTokens: 128000,
     compactionThresholdPercent: 60,
     supportsVision: true,
   },
@@ -36,14 +33,12 @@ export function getAvailableModels(): Array<{
   provider: string;
   modelName: string;
   contextWindow: number;
-  maxOutputTokens: number;
   supportsVision: boolean;
 }> {
   return Object.values(MODEL_CONFIGS).map((config) => ({
     provider: config.provider,
     modelName: config.modelName,
     contextWindow: config.contextWindow,
-    maxOutputTokens: config.maxOutputTokens,
     supportsVision: config.supportsVision,
   }));
 }
@@ -70,8 +65,10 @@ export function getModelConfig(
 }
 
 export function getCompactionThreshold(config: ModelConfig): number {
-  const usable = Math.max(0, config.contextWindow - config.maxOutputTokens);
-  return Math.floor((usable * config.compactionThresholdPercent) / 100);
+  // Without maxOutputTokens, use 80% of context window as threshold
+  return Math.floor(
+    (config.contextWindow * config.compactionThresholdPercent) / 100,
+  );
 }
 
 export function getDefaultModel(): { provider: string; modelName: string } {

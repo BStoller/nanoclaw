@@ -329,7 +329,6 @@ async function runQuery(
       chatJid: input.chatJid,
       provider: config.provider,
       model: config.modelName,
-      maxOutputTokens: config.maxOutputTokens,
       promptLength: prompt.length,
       isScheduledTask: input.isScheduledTask,
     },
@@ -458,7 +457,7 @@ async function runQuery(
           'Stream failed to process',
         );
       },
-      maxOutputTokens: config.maxOutputTokens,
+      maxOutputTokens: undefined,
       stopWhen: stepCountIs(500),
       onFinish: (event) => {
         responseMessages = event.response.messages ?? [];
@@ -710,8 +709,6 @@ async function maybeCompactSession(
       agent: input.agentId,
       sessionId,
       contextWindow: config.contextWindow,
-      maxOutputTokens: config.maxOutputTokens,
-      usableTokens: config.contextWindow - config.maxOutputTokens,
       threshold,
       thresholdPercent: config.compactionThresholdPercent,
       currentTokens,
@@ -778,8 +775,6 @@ async function maybeCompactSessionPreflight(
       agent: input.agentId,
       sessionId,
       contextWindow: config.contextWindow,
-      maxOutputTokens: config.maxOutputTokens,
-      usableTokens: config.contextWindow - config.maxOutputTokens,
       threshold,
       thresholdPercent: config.compactionThresholdPercent,
       estimatedTokens,
@@ -891,7 +886,7 @@ async function compactSession(
         },
         { role: 'user', content: summaryPrompt },
       ],
-      maxOutputTokens: Math.min(2048, config.maxOutputTokens),
+      maxOutputTokens: 2048,
     });
 
     for await (const chunk of summaryResult.textStream) {

@@ -108,7 +108,7 @@ function formatAvailableModels(): string {
   return models
     .map(
       (m) =>
-        `- ${m.provider}:${m.modelName} (context=${m.contextWindow}, maxOutput=${m.maxOutputTokens}, vision=${m.supportsVision ? 'yes' : 'no'})`,
+        `- ${m.provider}:${m.modelName} (context=${m.contextWindow}, vision=${m.supportsVision ? 'yes' : 'no'})`,
     )
     .join('\n');
 }
