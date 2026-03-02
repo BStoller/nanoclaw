@@ -17,7 +17,6 @@ import {
   storeChatMetadata,
   getAgent,
   getSession,
-  getAllSessions,
   setSession,
   deleteSession,
   setRouterState,
