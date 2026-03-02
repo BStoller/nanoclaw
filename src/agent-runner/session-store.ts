@@ -419,10 +419,37 @@ function normalizeToolResults(toolResults: any): ToolResultPart[] {
 function toolOutputToText(output: JSONValue | unknown): string {
   if (typeof output === 'string') return output;
   try {
-    return JSON.stringify(output);
+    return JSON.stringify(redactImageDataPayloads(output));
   } catch {
     return String(output ?? '');
   }
+}
+
+function redactImageDataPayloads(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactImageDataPayloads(item));
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+
+  if (record.type === 'image-data' && typeof record.data === 'string') {
+    return {
+      ...record,
+      data: '[image-data omitted]',
+      dataBytes: Buffer.byteLength(record.data, 'utf-8'),
+    };
+  }
+
+  const redacted: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record)) {
+    redacted[key] = redactImageDataPayloads(child);
+  }
+
+  return redacted;
 }
 
 function isTextPart(part: ModelMessage['content'][number]): part is TextPart {

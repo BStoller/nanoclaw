@@ -315,6 +315,173 @@ function truncateToolResultsInMessage(message: ModelMessage): ModelMessage {
   } as ModelMessage;
 }
 
+type ImagePayloadDiagnostics = {
+  promptMediaNotes: number;
+  promptInjectedImages: number;
+  promptInjectedImageBytes: number;
+  historyToolImageParts: number;
+  historyToolImageBytes: number;
+  historyToolTruncatedMarkers: number;
+  malformedImageParts: number;
+};
+
+type MessagePayloadDiagnostics = {
+  totalMessages: number;
+  roleCounts: {
+    system: number;
+    user: number;
+    assistant: number;
+    tool: number;
+  };
+  approxTextChars: number;
+  toolResultJsonChars: number;
+  largestToolResultChars: number;
+  largestToolResultToolName: string | null;
+};
+
+function getMessagePayloadDiagnostics(
+  messages: ModelMessage[],
+): MessagePayloadDiagnostics {
+  const roleCounts = {
+    system: 0,
+    user: 0,
+    assistant: 0,
+    tool: 0,
+  };
+
+  let approxTextChars = 0;
+  let toolResultJsonChars = 0;
+  let largestToolResultChars = 0;
+  let largestToolResultToolName: string | null = null;
+
+  for (const message of messages) {
+    if (message.role === 'system') roleCounts.system++;
+    if (message.role === 'user') roleCounts.user++;
+    if (message.role === 'assistant') roleCounts.assistant++;
+    if (message.role === 'tool') roleCounts.tool++;
+
+    const content = message.content;
+    if (typeof content === 'string') {
+      approxTextChars += content.length;
+      continue;
+    }
+
+    if (!Array.isArray(content)) continue;
+
+    for (const part of content) {
+      if (isTextPart(part)) {
+        approxTextChars += (part.text ?? '').length;
+        continue;
+      }
+
+      if (!isToolResultPart(part)) continue;
+
+      try {
+        const serialized = JSON.stringify(part.output);
+        const size = serialized.length;
+        toolResultJsonChars += size;
+        if (size > largestToolResultChars) {
+          largestToolResultChars = size;
+          largestToolResultToolName = part.toolName;
+        }
+      } catch {
+        // ignore serialization failures in diagnostics
+      }
+    }
+  }
+
+  return {
+    totalMessages: messages.length,
+    roleCounts,
+    approxTextChars,
+    toolResultJsonChars,
+    largestToolResultChars,
+    largestToolResultToolName,
+  };
+}
+
+function getImagePayloadDiagnostics(
+  messages: ModelMessage[],
+  promptMediaNotes: number,
+): ImagePayloadDiagnostics {
+  let promptInjectedImages = 0;
+  let promptInjectedImageBytes = 0;
+  let historyToolImageParts = 0;
+  let historyToolImageBytes = 0;
+  let historyToolTruncatedMarkers = 0;
+  let malformedImageParts = 0;
+
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+
+    if (message.role === 'user') {
+      for (const part of message.content) {
+        if (
+          part &&
+          typeof part === 'object' &&
+          (part as { type?: unknown }).type === 'image'
+        ) {
+          const image = (part as { image?: unknown }).image;
+          if (typeof image === 'string') {
+            promptInjectedImages++;
+            promptInjectedImageBytes += image.length;
+            if (image.includes('NaN bytes truncated')) {
+              malformedImageParts++;
+            }
+          }
+        }
+      }
+      continue;
+    }
+
+    if (message.role !== 'tool') continue;
+
+    for (const part of message.content) {
+      if (!isToolResultPart(part)) continue;
+      const output = part.output as unknown;
+      if (!output || typeof output !== 'object') continue;
+
+      const value = (output as { value?: unknown }).value;
+      if (!Array.isArray(value)) continue;
+
+      for (const outputPart of value) {
+        if (
+          !outputPart ||
+          typeof outputPart !== 'object' ||
+          (outputPart as { type?: unknown }).type !== 'image-data'
+        ) {
+          continue;
+        }
+
+        const data = (outputPart as { data?: unknown }).data;
+        if (typeof data !== 'string') continue;
+
+        historyToolImageParts++;
+        historyToolImageBytes += data.length;
+
+        if (data.includes('NaN bytes truncated')) {
+          historyToolTruncatedMarkers++;
+          malformedImageParts++;
+        }
+
+        if (!/^[A-Za-z0-9+/=\r\n]+$/.test(data)) {
+          malformedImageParts++;
+        }
+      }
+    }
+  }
+
+  return {
+    promptMediaNotes,
+    promptInjectedImages,
+    promptInjectedImageBytes,
+    historyToolImageParts,
+    historyToolImageBytes,
+    historyToolTruncatedMarkers,
+    malformedImageParts,
+  };
+}
+
 async function runQuery(
   prompt: string,
   sessionId: string,
@@ -375,7 +542,25 @@ async function runQuery(
       >;
 
   if (config.supportsVision) {
+    const mediaNotes = extractImagePathsFromMediaNotes(prompt);
     const images = await detectAndLoadImages(prompt);
+
+    logger.debug(
+      {
+        agent: input.agentId,
+        sessionId,
+        supportsVision: true,
+        promptMediaNoteCount: mediaNotes.length,
+        loadedImageCount: images.length,
+        loadedImageBytes: images.reduce(
+          (sum, img) => sum + img.base64.length,
+          0,
+        ),
+        missingImages: Math.max(0, mediaNotes.length - images.length),
+      },
+      'Vision image load diagnostics',
+    );
+
     if (images.length > 0) {
       userContent = [
         { type: 'text' as const, text: promptWithDatetime },
@@ -393,6 +578,22 @@ async function runQuery(
   }
 
   messages.push({ role: 'user', content: userContent });
+
+  const imageDiagnostics = getImagePayloadDiagnostics(
+    messages,
+    extractImagePathsFromMediaNotes(prompt).length,
+  );
+  const messagePayloadDiagnostics = getMessagePayloadDiagnostics(messages);
+
+  logger.debug(
+    {
+      agent: input.agentId,
+      sessionId,
+      ...imageDiagnostics,
+      ...messagePayloadDiagnostics,
+    },
+    'Model image context diagnostics',
+  );
 
   logger.debug(
     {
@@ -470,6 +671,13 @@ async function runQuery(
       onFinish: (event) => {
         responseMessages = event.response.messages ?? [];
         usageTokens = event.totalUsage?.totalTokens ?? 0;
+
+        const responseImageDiagnostics = getImagePayloadDiagnostics(
+          responseMessages,
+          0,
+        );
+        const responsePayloadDiagnostics =
+          getMessagePayloadDiagnostics(responseMessages);
         const lastAssistant = responseMessages
           .filter((m) => m.role === 'assistant')
           .pop();
@@ -505,6 +713,8 @@ async function runQuery(
             stepCount: event.stepNumber,
             usageTokens,
             finishReason: event.finishReason,
+            responseImageDiagnostics,
+            responsePayloadDiagnostics,
             lastAssistantKeys: lastAssistant
               ? Object.keys(lastAssistant as Record<string, unknown>)
               : [],
@@ -1088,7 +1298,7 @@ function extractContentText(message: ModelMessage): string | null {
         if (isToolResultPart(part)) {
           if (typeof part.output === 'string') return part.output;
           try {
-            return JSON.stringify(part.output);
+            return JSON.stringify(redactImageDataPayloads(part.output));
           } catch {
             return String(part.output ?? '');
           }
@@ -1099,6 +1309,33 @@ function extractContentText(message: ModelMessage): string | null {
       .trim();
   }
   return String(content);
+}
+
+function redactImageDataPayloads(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => redactImageDataPayloads(item));
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value;
+  }
+
+  const record = value as Record<string, unknown>;
+
+  if (record.type === 'image-data' && typeof record.data === 'string') {
+    return {
+      ...record,
+      data: '[image-data omitted]',
+      dataBytes: Buffer.byteLength(record.data, 'utf-8'),
+    };
+  }
+
+  const redacted: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(record)) {
+    redacted[key] = redactImageDataPayloads(child);
+  }
+
+  return redacted;
 }
 
 function extractToolCalls(message: ModelMessage): Array<{
