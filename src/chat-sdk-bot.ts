@@ -17,6 +17,7 @@ import {
   storeChatMetadata,
   getAgent,
   getSession,
+  getAllSessions,
   setSession,
   deleteSession,
   setRouterState,
@@ -137,6 +138,70 @@ async function ensureSessionForThread(threadId: string): Promise<string> {
   const sessionId = getOrCreateSessionId(threadId, agentId);
   await setSession(threadId, agentId, sessionId);
   return sessionId;
+}
+
+function extractPlatformAndChannelId(
+  threadId: string,
+): { platform: string; channelId: string } | null {
+  const parts = threadId.split(':');
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const platform = parts[0];
+  switch (platform) {
+    case 'discord':
+      if (parts.length >= 3) {
+        return { platform, channelId: parts[2] };
+      }
+      if (parts.length === 2) {
+        return { platform, channelId: parts[1] };
+      }
+      return null;
+    case 'slack':
+      return { platform, channelId: parts[parts.length - 1] };
+    case 'teams':
+      if (parts.length >= 3) {
+        return { platform, channelId: parts[2] };
+      }
+      return null;
+    case 'gchat':
+      return { platform, channelId: parts[1] };
+    case 'dc':
+      if (!parts[1]) {
+        return null;
+      }
+      return { platform: 'discord', channelId: parts[1] };
+    default:
+      return null;
+  }
+}
+
+async function resolveClearTargetJids(chatJid: string): Promise<string[]> {
+  const normalizedJid = jidToThreadId(chatJid);
+  const targets = new Set<string>([normalizedJid]);
+  const parsed = extractPlatformAndChannelId(normalizedJid);
+
+  if (!parsed) {
+    return [normalizedJid];
+  }
+
+  const sessions = await getAllSessions();
+  for (const jid of Object.keys(sessions)) {
+    const candidate = extractPlatformAndChannelId(jid);
+    if (!candidate) {
+      continue;
+    }
+
+    if (
+      candidate.platform === parsed.platform &&
+      candidate.channelId === parsed.channelId
+    ) {
+      targets.add(jid);
+    }
+  }
+
+  return Array.from(targets);
 }
 
 /**
@@ -563,8 +628,11 @@ async function executeCommand(
   const normalizedCommand = command.toLowerCase().replace(/^\//, '');
 
   if (normalizedCommand === 'clear') {
-    await clearSession(chatJid);
-    deleteSession(chatJid);
+    const targetJids = await resolveClearTargetJids(chatJid);
+    for (const targetJid of targetJids) {
+      await clearSession(targetJid);
+      deleteSession(targetJid);
+    }
     return 'Session cleared. New conversation will start on next message.';
   } else if (normalizedCommand === 'status') {
     const session = await getSession(chatJid);
