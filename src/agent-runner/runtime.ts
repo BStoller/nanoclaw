@@ -71,43 +71,31 @@ function getPostHogClient(): PostHog | null {
   return posthogClient;
 }
 
-// Shutdown PostHog client on process exit
-process.on('exit', () => {
+// Graceful shutdown for PostHog - only handle SIGINT/SIGTERM
+// Note: process.on('exit') cannot run async operations
+async function shutdownPostHog(): Promise<void> {
   if (posthogClient) {
-    posthogClient.shutdown();
+    try {
+      await posthogClient.shutdown();
+      logger.debug('PostHog client shut down successfully');
+    } catch (err) {
+      logger.error({ err }, 'Error shutting down PostHog client');
+    }
   }
-});
+}
 
-process.on('SIGINT', () => {
-  if (posthogClient) {
-    posthogClient.shutdown();
-  }
+process.on('SIGINT', async () => {
+  await shutdownPostHog();
   process.exit(0);
 });
 
-process.on('SIGTERM', () => {
-  if (posthogClient) {
-    posthogClient.shutdown();
-  }
+process.on('SIGTERM', async () => {
+  await shutdownPostHog();
   process.exit(0);
 });
 
-// Handle uncaught exceptions and unhandled rejections to ensure events are flushed
-process.on('uncaughtException', (err) => {
-  logger.error({ error: err.message, stack: err.stack }, 'Uncaught exception');
-  if (posthogClient) {
-    posthogClient.shutdown();
-  }
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason) => {
-  logger.error({ reason }, 'Unhandled rejection');
-  if (posthogClient) {
-    posthogClient.shutdown();
-  }
-  process.exit(1);
-});
+// Note: uncaughtException and unhandledRejection are handled in src/index.ts and src/logger.ts
+// We don't register them here to avoid duplicate handlers
 
 export interface AgentInput {
   prompt: string;
