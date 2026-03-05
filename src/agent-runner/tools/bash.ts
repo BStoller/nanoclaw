@@ -5,6 +5,7 @@ import { tool } from 'ai';
 
 import { resolveWorkspacePath, WorkspaceContext } from '../workspace-paths.js';
 import { evaluateBashCommandPolicy, loadBashPolicy } from './bash-policy.js';
+import { logger } from '../../logger.js';
 
 const execAsync = promisify(exec);
 
@@ -51,6 +52,20 @@ export function createBashTool(ctx: WorkspaceContext) {
           policyResult.policy,
           command,
         );
+
+        // Audit logging
+        if (!decision.allowed && policyResult.policy.logDenied) {
+          logger.info(
+            { agentDir: ctx.agentDir, command, reason: decision.reason },
+            'Bash command denied by policy',
+          );
+        } else if (decision.allowed && policyResult.policy.logAllowed) {
+          logger.info(
+            { agentDir: ctx.agentDir, command },
+            'Bash command allowed by policy',
+          );
+        }
+
         if (!decision.allowed) {
           return { stdout: '', stderr: decision.reason, exitCode: 1 };
         }

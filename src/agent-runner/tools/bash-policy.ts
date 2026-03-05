@@ -59,6 +59,8 @@ export interface BashPolicy {
   denyBuiltins: Set<string>;
   denyOperators: Set<string>;
   args: Map<string, ArgRule>;
+  logAllowed: boolean;
+  logDenied: boolean;
 }
 
 interface PolicyCacheEntry {
@@ -141,6 +143,7 @@ function splitSimpleCommands(command: string): string[] {
   let current = '';
   let inSingle = false;
   let inDouble = false;
+  let inBacktick = false;
   let escaping = false;
   let subshellDepth = 0;
 
@@ -154,26 +157,35 @@ function splitSimpleCommands(command: string): string[] {
       continue;
     }
 
-    if (char === '\\' && !inSingle) {
+    if (char === '\\' && !inSingle && !inBacktick) {
       current += char;
       escaping = true;
       continue;
     }
 
-    if (char === "'" && !inDouble) {
+    if (char === "'" && !inDouble && !inBacktick) {
       inSingle = !inSingle;
       current += char;
       continue;
     }
 
-    if (char === '"' && !inSingle) {
+    if (char === '"' && !inSingle && !inBacktick) {
       inDouble = !inDouble;
       current += char;
       continue;
     }
 
-    if (!inSingle && !inDouble) {
+    if (char === '`' && !inSingle && !inDouble) {
+      inBacktick = !inBacktick;
+      current += char;
+      continue;
+    }
+
+    if (!inSingle && !inDouble && !inBacktick) {
       if (char === '$' && next === '(') {
+        subshellDepth += 1;
+      } else if (char === '(' && subshellDepth === 0) {
+        // Bare ( starts a subshell
         subshellDepth += 1;
       } else if (char === ')' && subshellDepth > 0) {
         subshellDepth -= 1;
@@ -208,6 +220,22 @@ function splitSimpleCommands(command: string): string[] {
   }
 
   return commands;
+}
+
+function stripSubshellParens(input: string): string {
+  // Remove leading ( for bare subshell commands like (rm ...)
+  if (input.startsWith('(')) {
+    return input.slice(1).trim();
+  }
+  return input;
+}
+
+function stripBackticks(input: string): string {
+  // Remove leading backtick (the closing backtick is typically part of the last arg)
+  if (input.startsWith('`')) {
+    return input.slice(1).trim();
+  }
+  return input;
 }
 
 const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=.*/;
@@ -249,6 +277,10 @@ export function parseCommandSegments(command: string): ParsedCommand[] {
       }
       commandName = tokens[i];
     }
+
+    // Strip subshell parens and backticks from command name
+    commandName = stripSubshellParens(commandName);
+    commandName = stripBackticks(commandName);
 
     parsed.push({
       raw: segment,
@@ -308,6 +340,8 @@ function compilePolicy(
     ),
     denyOperators: new Set((config.shell?.denyOperators || []).map((op) => op)),
     args,
+    logAllowed: config.audit?.logAllowed ?? false,
+    logDenied: config.audit?.logDenied ?? false,
   };
 }
 
@@ -360,8 +394,13 @@ function hasDeniedOperator(
   if (denyOperators.has('||') && rawCommand.includes('||')) {
     return true;
   }
-  if (denyOperators.has('|') && rawCommand.includes('|')) {
-    return true;
+  // Check for lone |, but not || (already checked above)
+  if (denyOperators.has('|')) {
+    // Must check for || first, then for lone |
+    const withoutOr = rawCommand.replace(/\|\|/g, '');
+    if (withoutOr.includes('|')) {
+      return true;
+    }
   }
   if (denyOperators.has(';') && rawCommand.includes(';')) {
     return true;
