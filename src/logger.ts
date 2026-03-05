@@ -27,9 +27,13 @@ if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
 }
 
-// Detect dev mode - dev script sets LOG_LEVEL=debug
 const isDevMode =
   process.env.LOG_LEVEL === 'debug' || process.env.NODE_ENV === 'development';
+
+if (isDevMode && POSTHOG_ENABLED) {
+  // warn will appear in the file/console transport that IS active
+  console.warn('[logger] LOG_LEVEL=debug: PostHog transport is disabled in dev mode');
+}
 
 // Disable colors in logs when running non-interactively or when NO_COLOR is set
 const useColors = process.stdout.isTTY && !process.env.NO_COLOR;
