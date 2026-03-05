@@ -33,23 +33,27 @@ function escapeRegex(str: string): string {
 export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
 
+// Discord Bot Configuration (optional - configure at least one platform)
+// Required for Discord integration:
+// - Create a bot at https://discord.com/developers/applications
+// - Copy the bot token from Bot > Reset Token
 export const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN || '';
 
-// Platform-specific credentials (optional - only configure platforms you use)
-// Discord
-export const DISCORD_PUBLIC_KEY = process.env.DISCORD_PUBLIC_KEY || '';
-export const DISCORD_APPLICATION_ID = process.env.DISCORD_APPLICATION_ID || '';
-
-// Slack (optional)
+// Slack Bot Configuration (optional - configure at least one platform)
+// Required for Slack integration:
+// - Create a Slack app at https://api.slack.com/apps
+// - Go to OAuth & Permissions, add scopes: chat:write, im:write, channels:history, groups:history
+// - Install app to workspace and copy Bot User OAuth Token (starts with xoxb-)
+// - Go to Basic Information to get Signing Secret for webhook verification
 export const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || '';
 export const SLACK_SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || '';
 
-// Teams (optional)
+// Teams Bot Configuration (optional)
 export const TEAMS_APP_ID = process.env.TEAMS_APP_ID || '';
 export const TEAMS_APP_PASSWORD = process.env.TEAMS_APP_PASSWORD || '';
 export const TEAMS_APP_TENANT_ID = process.env.TEAMS_APP_TENANT_ID || '';
 
-// Google Chat (optional)
+// Google Chat Configuration (optional)
 export const GOOGLE_CHAT_CREDENTIALS =
   process.env.GOOGLE_CHAT_CREDENTIALS || '';
 

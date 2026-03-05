@@ -24,6 +24,7 @@
     "@ai-sdk/openai": "^3.0.35",
     "@ai-sdk/openai-compatible": "^2.0.30",
     "@chat-adapter/discord": "^4.14.0",
+    "@chat-adapter/slack": "^4.15.0",
     "@libsql/client": "^0.17.0",
     "@opentelemetry/api-logs": "^0.213.0",
     "@opentelemetry/exporter-logs-otlp-http": "^0.213.0",
