@@ -59,7 +59,7 @@ function getPostHogClient(): PostHog | null {
 
   if (!posthogClient) {
     posthogClient = new PostHog(process.env.POSTHOG_API_KEY, {
-      host: process.env.POSTHOG_HOST ?? '',
+      ...(process.env.POSTHOG_HOST ? { host: process.env.POSTHOG_HOST } : {}),
     });
 
     posthogClient.identify({
