@@ -12,9 +12,12 @@ import {
 } from 'ai';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import { withTracing } from '@posthog/ai';
+import { PostHog } from 'posthog-node';
 
 import { AGENTS_DIR, SESSIONS_DIR } from '../config';
 import { logger } from '../logger';
+import { getInstanceId, getInstanceName } from '../instance.js';
 import { Agent } from '../types';
 import { createToolRegistry } from './tool-registry';
 import {
@@ -39,11 +42,55 @@ import {
   extractImagePathsFromMediaNotes,
 } from '../attachments/images';
 import { pruneToolOutputs } from '../context/prune';
+import { Name } from 'drizzle-orm';
 
 const DEFAULT_MODEL_PROVIDER = 'opencode-zen';
 const DEFAULT_MODEL_NAME = 'kimi-k2.5';
 
 const activeCompactions = new Set<string>();
+
+// Initialize PostHog client for AI tracing (if enabled)
+let posthogClient: PostHog | null = null;
+
+function getPostHogClient(): PostHog | null {
+  if (!process.env.POSTHOG_API_KEY) {
+    return null;
+  }
+
+  if (!posthogClient) {
+    posthogClient = new PostHog(process.env.POSTHOG_API_KEY, {
+      ...(process.env.POSTHOG_HOST ? { host: process.env.POSTHOG_HOST } : {}),
+    });
+
+    posthogClient.identify({
+      distinctId: getInstanceId(),
+      properties: {
+        $set: { name: getInstanceName() },
+      },
+    });
+
+    logger.debug('PostHog client initialized for AI tracing');
+  }
+
+  return posthogClient;
+}
+
+// Graceful shutdown for PostHog - exported for use in main shutdown sequence
+// Note: This should be called as part of the main shutdown sequence, not in signal handlers
+export async function shutdownPostHog(): Promise<void> {
+  if (posthogClient) {
+    try {
+      await posthogClient.shutdown();
+      logger.debug('PostHog client shut down successfully');
+    } catch (err) {
+      logger.error({ err }, 'Error shutting down PostHog client');
+    }
+  }
+}
+
+// Note: Signal handlers (SIGINT/SIGTERM) and uncaughtException/unhandledRejection
+// are handled in src/index.ts to avoid duplicate handlers and race conditions.
+// PostHog shutdown is called from the main shutdown sequence in index.ts.
 
 export interface AgentInput {
   prompt: string;
@@ -199,6 +246,8 @@ function createModel({
     );
   }
 
+  let baseModel;
+
   if (configProvider === 'opencode-zen') {
     const apiKey = process.env.OPENCODE_ZEN_API_KEY;
 
@@ -219,43 +268,62 @@ function createModel({
         baseURL: 'https://opencode.ai/zen/v1',
       });
 
-      return provider.responses(modelName);
+      baseModel = provider.responses(modelName);
+    } else {
+      logger.debug(
+        { provider: configProvider, model: modelName, hasApiKey },
+        'Creating OpenAI-compatible model',
+      );
+      const provider = createOpenAICompatible({
+        name: 'opencode-zen',
+        baseURL: 'https://opencode.ai/zen/v1',
+        ...(apiKey ? { apiKey } : {}),
+        includeUsage: true,
+      });
+      baseModel = provider(modelName);
     }
+  } else {
+    if (configProvider !== 'anthropic') {
+      logger.warn(
+        { provider: configProvider, fallback: 'anthropic' },
+        `Unknown provider, falling back to anthropic`,
+      );
+    }
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    const authToken = process.env.ANTHROPIC_AUTH_TOKEN;
     logger.debug(
-      { provider: configProvider, model: modelName, hasApiKey },
-      'Creating OpenAI-compatible model',
+      {
+        provider: 'anthropic',
+        model: modelName,
+        hasApiKey,
+        hasAuthToken: !!authToken,
+      },
+      'Creating Anthropic model',
     );
-    const provider = createOpenAICompatible({
-      name: 'opencode-zen',
-      baseURL: 'https://opencode.ai/zen/v1',
+    const provider = createAnthropic({
       ...(apiKey ? { apiKey } : {}),
-      includeUsage: true,
+      ...(authToken ? { authToken } : {}),
     });
-    return provider(modelName);
+    baseModel = provider(modelName);
   }
 
-  if (configProvider !== 'anthropic') {
-    logger.warn(
-      { provider: configProvider, fallback: 'anthropic' },
-      `Unknown provider, falling back to anthropic`,
+  // Wrap with PostHog tracing if enabled
+  const phClient = getPostHogClient();
+  if (phClient) {
+    logger.debug(
+      { provider: configProvider, model: modelName },
+      'Wrapping model with PostHog tracing',
     );
+    return withTracing(baseModel, phClient, {
+      posthogDistinctId: getInstanceId(),
+      posthogProperties: {
+        provider: configProvider,
+        model: modelName,
+      },
+    });
   }
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  const authToken = process.env.ANTHROPIC_AUTH_TOKEN;
-  logger.debug(
-    {
-      provider: 'anthropic',
-      model: modelName,
-      hasApiKey,
-      hasAuthToken: !!authToken,
-    },
-    'Creating Anthropic model',
-  );
-  const provider = createAnthropic({
-    ...(apiKey ? { apiKey } : {}),
-    ...(authToken ? { authToken } : {}),
-  });
-  return provider(modelName);
+
+  return baseModel;
 }
 
 function validateRequestedModel(input: AgentInput): void {

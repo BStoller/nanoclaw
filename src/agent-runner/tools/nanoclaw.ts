@@ -21,6 +21,7 @@ import {
   runTaskNow,
   type SchedulerDependencies,
 } from '../../task-scheduler.js';
+import { getInstanceInfo } from '../../instance.js';
 
 export interface NanoClawContext {
   chatJid: string;
@@ -487,6 +488,17 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
           .join('\n');
         return {
           message: agentList || 'No agents registered.',
+        };
+      },
+    }),
+    instance_info: tool({
+      description:
+        'Get information about this NanoClaw instance (instance ID and name).',
+      inputSchema: z.object({}).optional(),
+      execute: async () => {
+        const info = getInstanceInfo();
+        return {
+          message: `Instance ID: ${info.id}\nInstance Name: ${info.name}\nCreated: ${info.createdAt}`,
         };
       },
     }),

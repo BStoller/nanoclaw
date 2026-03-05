@@ -1,5 +1,4 @@
-import { config } from 'dotenv';
-config({ path: path.join(process.cwd(), '.env') });
+import './env'; // Load env vars FIRST - must be imported before any other modules
 
 import fs from 'fs';
 import path from 'path';
@@ -12,7 +11,11 @@ import { startSchedulerLoop } from './task-scheduler';
 import { GroupQueue } from './group-queue';
 import { runMigrations } from '../scripts/migrate';
 import { getAllAgents, getAllSessions } from './db';
-import { AgentInput, createAgentRuntime } from './agent-runner/runtime';
+import {
+  AgentInput,
+  createAgentRuntime,
+  shutdownPostHog,
+} from './agent-runner/runtime';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router';
@@ -138,6 +141,8 @@ async function main(): Promise<void> {
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    // Flush PostHog events before draining queue (PostHog is faster than queue)
+    await shutdownPostHog();
     await queue.shutdown(10000);
     process.exit(0);
   };
