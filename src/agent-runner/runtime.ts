@@ -17,6 +17,7 @@ import { PostHog } from 'posthog-node';
 
 import { AGENTS_DIR, SESSIONS_DIR } from '../config';
 import { logger } from '../logger';
+import { getInstanceId, getInstanceName } from '../instance.js';
 import { Agent } from '../types';
 import { createToolRegistry } from './tool-registry';
 import {
@@ -41,6 +42,7 @@ import {
   extractImagePathsFromMediaNotes,
 } from '../attachments/images';
 import { pruneToolOutputs } from '../context/prune';
+import { Name } from 'drizzle-orm';
 
 const DEFAULT_MODEL_PROVIDER = 'opencode-zen';
 const DEFAULT_MODEL_NAME = 'kimi-k2.5';
@@ -59,6 +61,14 @@ function getPostHogClient(): PostHog | null {
     posthogClient = new PostHog(process.env.POSTHOG_API_KEY, {
       host: process.env.POSTHOG_HOST ?? '',
     });
+
+    posthogClient.identify({
+      distinctId: getInstanceId(),
+      properties: {
+        $set: { name: getInstanceName() },
+      },
+    });
+
     logger.debug('PostHog client initialized for AI tracing');
   }
 
@@ -305,6 +315,7 @@ function createModel({
       'Wrapping model with PostHog tracing',
     );
     return withTracing(baseModel, phClient, {
+      posthogDistinctId: getInstanceId(),
       posthogProperties: {
         provider: configProvider,
         model: modelName,

@@ -1,6 +1,10 @@
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
+import { getInstanceInfo } from './instance.js';
+
+// Load instance info early (before logger setup)
+const instanceInfo = getInstanceInfo();
 
 // Set OTEL env vars for PostHog BEFORE any imports that might read them
 // This ensures pino-opentelemetry-transport gets the right config in its worker thread
@@ -13,7 +17,7 @@ if (process.env.POSTHOG_API_KEY) {
     process.env.OTEL_EXPORTER_OTLP_HEADERS = `Authorization=Bearer ${process.env.POSTHOG_API_KEY}`;
   }
   if (!process.env.OTEL_RESOURCE_ATTRIBUTES) {
-    process.env.OTEL_RESOURCE_ATTRIBUTES = `service.name=nanoclaw,service.version=${process.env.npm_package_version || '1.0.0'}`;
+    process.env.OTEL_RESOURCE_ATTRIBUTES = `service.name=nanoclaw,service.version=${process.env.npm_package_version || '1.0.0'},service.instance.id=${instanceInfo.id},service.instance.name=${instanceInfo.name}`;
   }
 }
 
@@ -69,6 +73,8 @@ if (isDevMode) {
       resourceAttributes: {
         'service.name': 'nanoclaw',
         'service.version': process.env.npm_package_version || '1.0.0',
+        'service.instance.id': instanceInfo.id,
+        'service.instance.name': instanceInfo.name,
       },
     },
   });
@@ -86,6 +92,10 @@ if (isDevMode) {
 
 export const logger = pino({
   level,
+  base: {
+    instanceId: instanceInfo.id,
+    instanceName: instanceInfo.name,
+  },
   transport: {
     targets: transportTargets,
   },
@@ -96,6 +106,8 @@ logger.info(
     level,
     isDevMode,
     posthogEnabled: process.env.POSTHOG_API_KEY != undefined,
+    instanceId: instanceInfo.id,
+    instanceName: instanceInfo.name,
   },
   'logger initialized',
 );
