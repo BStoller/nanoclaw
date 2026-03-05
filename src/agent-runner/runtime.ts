@@ -233,7 +233,7 @@ function buildSystemPrompt(agentId: string, isMain: boolean): string {
 
 function createModel(
   { provider: configProvider, modelName, isOpenAIResponseFormat }: ModelConfig,
-  type: 'agent' | 'compaction',
+  type?: 'agent' | 'compaction',
 ) {
   const hasApiKey =
     (process.env.OPENCODE_ZEN_API_KEY ?? process.env.ANTHROPIC_API_KEY) !=
@@ -316,7 +316,7 @@ function createModel(
     return withTracing(baseModel, phClient, {
       posthogDistinctId: getInstanceId(),
       posthogProperties: {
-        type,
+        type: type ?? 'agent',
         provider: configProvider,
         model: modelName,
       },
@@ -1154,7 +1154,7 @@ async function compactSession(
     }
 
     const config = getModelConfig(input.modelProvider, input.modelName);
-    const model = createModel(config);
+    const model = createModel(config, 'compaction');
 
     const summaryPrompt = buildSummaryPrompt(older);
     let summaryText = '';
