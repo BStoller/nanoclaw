@@ -1,5 +1,4 @@
-import { config } from 'dotenv';
-config({ path: path.join(process.cwd(), '.env') });
+import './env'; // Load env vars FIRST - must be imported before any other modules
 
 import fs from 'fs';
 import path from 'path';
