@@ -496,6 +496,7 @@ export class VoiceBridgeSessionManager {
         this.clearSessionSpeechState(voiceSessionId);
         this.lastSpeechStoppedAtMs.delete(voiceSessionId);
         this.activeResponseBySession.delete(voiceSessionId);
+        this.activeSessions.delete(voiceSessionId);
         break;
       case 'session.closed':
         logger.info({ voiceSessionId }, 'Realtime voice session closed');
