@@ -213,6 +213,36 @@ async function resolveAgentForJid(chatJid: string): Promise<Agent | null> {
   return (await getAgent(agentId)) ?? null;
 }
 
+const SUPPORTED_COMMANDS = new Set([
+  'clear',
+  'status',
+  'chatid',
+  'update',
+  'voice-join',
+  'voice-leave',
+]);
+
+function getSupportedCommand(content: string): string | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('/')) {
+    return null;
+  }
+
+  const command = trimmed.slice(1).toLowerCase();
+  return SUPPORTED_COMMANDS.has(command) ? command : null;
+}
+
+function getUnroutedStatus(chatJid: string): string {
+  const threadId = jidToThreadId(chatJid);
+  const parsed = extractPlatformAndChannelId(threadId);
+
+  if (!parsed) {
+    return `Status: agent=unrouted session=none thread=${threadId}`;
+  }
+
+  return `Status: agent=unrouted session=none thread=${threadId} platform=${parsed.platform} channel=${parsed.channelId}`;
+}
+
 /**
  * Add 👀 reaction to show we're processing
  */
@@ -628,12 +658,16 @@ async function executeCommand(
   command: string,
   sender?: string,
 ): Promise<string> {
+  const normalizedCommand = command.toLowerCase().replace(/^\//, '');
   const agent = await resolveAgentForJid(chatJid);
+
+  if (!agent && normalizedCommand === 'status') {
+    return getUnroutedStatus(chatJid);
+  }
+
   if (!agent) {
     return `No agent configured for this channel. Please add a route in src/router.ts.`;
   }
-
-  const normalizedCommand = command.toLowerCase().replace(/^\//, '');
 
   if (normalizedCommand === 'clear') {
     const targetJids = await resolveClearTargetJids(chatJid);
@@ -774,6 +808,17 @@ export async function createChatSdkBot(): Promise<Chat> {
       'incoming onNewMention',
     );
 
+    const command = getSupportedCommand(message.text || '');
+    if (command) {
+      const response = await executeCommand(
+        thread.id,
+        command,
+        message.author?.userId,
+      );
+      await thread.post(response);
+      return;
+    }
+
     const agent = await resolveAgentForJid(thread.id);
 
     if (!agent) {
@@ -837,12 +882,6 @@ export async function createChatSdkBot(): Promise<Chat> {
 
   // Handle subscribed messages (follow-ups in same thread)
   bot.onSubscribedMessage(async (thread, message) => {
-    const agent = await resolveAgentForJid(thread.id);
-
-    if (!agent) {
-      return;
-    }
-
     // Get content
     let content = message.text || '';
 
@@ -870,27 +909,21 @@ export async function createChatSdkBot(): Promise<Chat> {
     }
 
     // Check for commands
-    const trimmed = content.trim();
-    if (trimmed.startsWith('/')) {
-      const command = trimmed.slice(1).toLowerCase();
-      if (
-        [
-          'clear',
-          'status',
-          'chatid',
-          'update',
-          'voice-join',
-          'voice-leave',
-        ].includes(command)
-      ) {
-        const response = await executeCommand(
-          thread.id,
-          command,
-          message.author?.userId,
-        );
-        await thread.post(response);
-        return;
-      }
+    const command = getSupportedCommand(content);
+    if (command) {
+      const response = await executeCommand(
+        thread.id,
+        command,
+        message.author?.userId,
+      );
+      await thread.post(response);
+      return;
+    }
+
+    const agent = await resolveAgentForJid(thread.id);
+
+    if (!agent) {
+      return;
     }
 
     // Add acknowledgement
@@ -947,6 +980,17 @@ export async function createChatSdkBot(): Promise<Chat> {
         { threadId: thread.id },
         'Skipping message - already subscribed',
       );
+      return;
+    }
+
+    const command = getSupportedCommand(message.text || '');
+    if (command) {
+      const response = await executeCommand(
+        thread.id,
+        command,
+        message.author?.userId,
+      );
+      await thread.post(response);
       return;
     }
 
