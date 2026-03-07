@@ -145,6 +145,34 @@ describe('bash-policy load and evaluate', () => {
     expect(load.ok).toBe(false);
   });
 
+  it('rejects whitelist mode without commands.whitelist entries', async () => {
+    const agentDir = makeAgentDir();
+    writePolicy(agentDir, {
+      mode: 'whitelist',
+      commands: {},
+    });
+
+    const load = await loadBashPolicy(agentDir);
+    expect(load.ok).toBe(false);
+    if (!load.ok) {
+      expect(load.error).toContain('commands.whitelist');
+    }
+  });
+
+  it('rejects blacklist mode without commands.blacklist entries', async () => {
+    const agentDir = makeAgentDir();
+    writePolicy(agentDir, {
+      mode: 'blacklist',
+      commands: {},
+    });
+
+    const load = await loadBashPolicy(agentDir);
+    expect(load.ok).toBe(false);
+    if (!load.ok) {
+      expect(load.error).toContain('commands.blacklist');
+    }
+  });
+
   it('allows || when only | is denied', async () => {
     const agentDir = makeAgentDir();
     writePolicy(agentDir, {
@@ -213,6 +241,48 @@ describe('bash-policy load and evaluate', () => {
     }
   });
 
+  it('denies combined short flags that include a denied short flag', async () => {
+    const agentDir = makeAgentDir();
+    writePolicy(agentDir, {
+      mode: 'whitelist',
+      commands: { whitelist: ['rm'] },
+      args: {
+        rm: {
+          denyFlags: ['-r'],
+        },
+      },
+    });
+
+    const load = await loadBashPolicy(agentDir);
+    if (!load.ok || !load.found) {
+      throw new Error('Expected policy to load');
+    }
+
+    expect(evaluateBashCommandPolicy(load.policy, 'rm -rf /tmp').allowed).toBe(
+      false,
+    );
+  });
+
+  it('allows combined short flags when each short flag is allowlisted', async () => {
+    const agentDir = makeAgentDir();
+    writePolicy(agentDir, {
+      mode: 'whitelist',
+      commands: { whitelist: ['ls'] },
+      args: {
+        ls: {
+          allowFlags: ['-l', '-a'],
+        },
+      },
+    });
+
+    const load = await loadBashPolicy(agentDir);
+    if (!load.ok || !load.found) {
+      throw new Error('Expected policy to load');
+    }
+
+    expect(evaluateBashCommandPolicy(load.policy, 'ls -la').allowed).toBe(true);
+  });
+
   it('parses bare subshell and backtick correctly', () => {
     // Test that parsing works correctly for subshells
     const subshellSegments = parseCommandSegments('(rm -rf /tmp)');
@@ -261,6 +331,25 @@ describe('bash-policy load and evaluate', () => {
       args: {
         git: {
           denyPatterns: ['(a+)+'],
+        },
+      },
+    });
+
+    const load = await loadBashPolicy(agentDir);
+    expect(load.ok).toBe(false);
+    if (!load.ok) {
+      expect(load.error).toContain('Unsafe deny pattern');
+    }
+  });
+
+  it('rejects unsafe nested quantified regex deny patterns', async () => {
+    const agentDir = makeAgentDir();
+    writePolicy(agentDir, {
+      mode: 'whitelist',
+      commands: { whitelist: ['git'] },
+      args: {
+        git: {
+          denyPatterns: ['((a+))+'],
         },
       },
     });

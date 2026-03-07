@@ -40,7 +40,26 @@ const bashPolicySchema = z
       .strict()
       .optional(),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.mode === 'whitelist' && !value.commands.whitelist?.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'whitelist mode requires at least one entry in commands.whitelist',
+        path: ['commands', 'whitelist'],
+      });
+    }
+
+    if (value.mode === 'blacklist' && !value.commands.blacklist?.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'blacklist mode requires at least one entry in commands.blacklist',
+        path: ['commands', 'blacklist'],
+      });
+    }
+  });
 
 type BashPolicyConfig = z.infer<typeof bashPolicySchema>;
 
@@ -119,11 +138,182 @@ function isSafeRegexPattern(pattern: string): boolean {
     return false;
   }
 
-  if (/\((?:[^()\\]|\\.)*[+*{](?:[^()\\]|\\.)*\)(?:[+*]|\{)/.test(pattern)) {
+  const groupHasNestedQuantifier: boolean[] = [];
+  let escaping = false;
+  let inCharClass = false;
+  let previousQuantifiable = false;
+
+  for (let i = 0; i < pattern.length; i++) {
+    const char = pattern[i];
+
+    if (escaping) {
+      escaping = false;
+      previousQuantifiable = true;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaping = true;
+      continue;
+    }
+
+    if (inCharClass) {
+      if (char === ']') {
+        inCharClass = false;
+        previousQuantifiable = true;
+      }
+      continue;
+    }
+
+    if (char === '[') {
+      inCharClass = true;
+      previousQuantifiable = false;
+      continue;
+    }
+
+    if (char === '(') {
+      if (pattern[i + 1] === '?') {
+        if (pattern[i + 2] !== ':') {
+          return false;
+        }
+        i += 2;
+      }
+
+      groupHasNestedQuantifier.push(false);
+      previousQuantifiable = false;
+      continue;
+    }
+
+    if (char === ')') {
+      const currentGroup = groupHasNestedQuantifier.pop();
+      if (currentGroup === undefined) {
+        return false;
+      }
+
+      const quantifierEnd = findRegexQuantifierEnd(pattern, i + 1);
+      if (quantifierEnd !== null) {
+        if (currentGroup) {
+          return false;
+        }
+
+        if (groupHasNestedQuantifier.length > 0) {
+          groupHasNestedQuantifier[groupHasNestedQuantifier.length - 1] = true;
+        }
+
+        i = quantifierEnd - 1;
+        previousQuantifiable = false;
+        continue;
+      }
+
+      if (currentGroup && groupHasNestedQuantifier.length > 0) {
+        groupHasNestedQuantifier[groupHasNestedQuantifier.length - 1] = true;
+      }
+
+      previousQuantifiable = true;
+      continue;
+    }
+
+    if (previousQuantifiable) {
+      const quantifierEnd = findRegexQuantifierEnd(pattern, i);
+      if (quantifierEnd !== null) {
+        if (groupHasNestedQuantifier.length > 0) {
+          groupHasNestedQuantifier[groupHasNestedQuantifier.length - 1] = true;
+        }
+
+        i = quantifierEnd - 1;
+        previousQuantifiable = false;
+        continue;
+      }
+    }
+
+    previousQuantifiable = !['|', '^', '$'].includes(char);
+  }
+
+  if (escaping || inCharClass || groupHasNestedQuantifier.length > 0) {
     return false;
   }
 
   return true;
+}
+
+function findRegexQuantifierEnd(
+  pattern: string,
+  startIndex: number,
+): number | null {
+  const char = pattern[startIndex];
+  if (char === '*' || char === '+' || char === '?') {
+    return pattern[startIndex + 1] === '?' ? startIndex + 2 : startIndex + 1;
+  }
+
+  if (char !== '{') {
+    return null;
+  }
+
+  let i = startIndex + 1;
+  let sawDigit = false;
+
+  while (i < pattern.length && /\d/.test(pattern[i])) {
+    sawDigit = true;
+    i += 1;
+  }
+
+  if (pattern[i] === ',') {
+    i += 1;
+    while (i < pattern.length && /\d/.test(pattern[i])) {
+      sawDigit = true;
+      i += 1;
+    }
+  }
+
+  if (!sawDigit || pattern[i] !== '}') {
+    return null;
+  }
+
+  i += 1;
+  if (pattern[i] === '?') {
+    i += 1;
+  }
+
+  return i;
+}
+
+function isShortFlag(flag: string): boolean {
+  return /^-[A-Za-z]$/.test(flag);
+}
+
+function splitCombinedShortFlags(arg: string): string[] {
+  const equalsIndex = arg.indexOf('=');
+  const flagPart = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
+
+  if (!/^-([A-Za-z]{2,})$/.test(flagPart)) {
+    return [];
+  }
+
+  return flagPart
+    .slice(1)
+    .split('')
+    .map((part) => `-${part}`);
+}
+
+function flagMatchesArg(flag: string, arg: string): boolean {
+  if (arg === flag || arg.startsWith(`${flag}=`)) {
+    return true;
+  }
+
+  if (isShortFlag(flag)) {
+    return splitCombinedShortFlags(arg).includes(flag);
+  }
+
+  return false;
+}
+
+function argUsesOnlyAllowedFlags(arg: string, allowFlags: string[]): boolean {
+  const combinedFlags = splitCombinedShortFlags(arg);
+  if (combinedFlags.length > 0) {
+    return combinedFlags.every((flag) => allowFlags.includes(flag));
+  }
+
+  return allowFlags.some((flag) => flagMatchesArg(flag, arg));
 }
 
 function findClosingBacktick(input: string, startIndex: number): number {
@@ -611,7 +801,7 @@ function hasDeniedOperator(
 }
 
 function flagDenied(flag: string, args: string[]): boolean {
-  return args.some((arg) => arg === flag || arg.startsWith(`${flag}=`));
+  return args.some((arg) => flagMatchesArg(flag, arg));
 }
 
 export function evaluateBashCommandPolicy(
@@ -678,11 +868,11 @@ export function evaluateBashCommandPolicy(
           continue;
         }
 
-        const isAllowed = argRule.allowFlags.some(
-          (flag) => arg === flag || arg.startsWith(`${flag}=`),
+        const isAllowed = argRule.allowFlags.some((flag) =>
+          flagMatchesArg(flag, arg),
         );
 
-        if (!isAllowed) {
+        if (!isAllowed && !argUsesOnlyAllowedFlags(arg, argRule.allowFlags)) {
           return {
             allowed: false,
             reason: `Blocked by bash policy (${policy.sourcePath}): command "${segment.command}" uses non-allowed flag "${arg}".`,
