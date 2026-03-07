@@ -1,4 +1,5 @@
 import EventEmitter from 'events';
+import { createRequire } from 'module';
 import { PassThrough } from 'stream';
 
 import {
@@ -11,6 +12,7 @@ import {
   createAudioPlayer,
   createAudioResource,
   entersState,
+  generateDependencyReport,
   joinVoiceChannel,
 } from '@discordjs/voice';
 import {
@@ -19,6 +21,7 @@ import {
   GatewayIntentBits,
   GuildBasedChannel,
   GuildMember,
+  PermissionsBitField,
   Partials,
   REST,
   Routes,
@@ -38,6 +41,27 @@ import type {
 
 const VOICE_JOIN_COMMAND = 'voice-join';
 const VOICE_LEAVE_COMMAND = 'voice-leave';
+const require = createRequire(import.meta.url);
+
+function hasAnyDiscordEncryptionLibrary(): boolean {
+  const candidates = [
+    'sodium-native',
+    'sodium',
+    'libsodium-wrappers',
+    'tweetnacl',
+  ];
+
+  for (const pkg of candidates) {
+    try {
+      require.resolve(pkg);
+      return true;
+    } catch {
+      // continue
+    }
+  }
+
+  return false;
+}
 
 export function pcmStereo48kToMono24kForTest(buffer: Buffer): Buffer {
   const sampleCount = Math.floor(buffer.length / 4);
@@ -120,6 +144,26 @@ export class DiscordGatewayVoiceTransport {
     this.client.on('voiceStateUpdate', (oldState, newState) => {
       void this.handleVoiceStateUpdate(oldState, newState);
     });
+
+    this.client.on('raw', (packet: any) => {
+      if (
+        packet?.t === 'VOICE_STATE_UPDATE' ||
+        packet?.t === 'VOICE_SERVER_UPDATE'
+      ) {
+        logger.debug(
+          {
+            event: packet.t,
+            guildId: packet.d?.guild_id,
+            channelId: packet.d?.channel_id,
+            userId: packet.d?.user_id,
+            endpoint: packet.d?.endpoint,
+            tokenPresent: Boolean(packet.d?.token),
+            sessionIdPresent: Boolean(packet.d?.session_id),
+          },
+          'Received Discord raw voice gateway event',
+        );
+      }
+    });
   }
 
   getClient(): Client {
@@ -131,6 +175,11 @@ export class DiscordGatewayVoiceTransport {
       logger.debug('Reusing existing Discord voice client connection promise');
       return await this.readyPromise;
     }
+
+    logger.info(
+      { report: generateDependencyReport() },
+      'Discord voice dependency report',
+    );
 
     logger.info(
       {
@@ -182,6 +231,12 @@ export class DiscordGatewayVoiceTransport {
       );
     }
 
+    if (!hasAnyDiscordEncryptionLibrary()) {
+      throw new Error(
+        'Discord voice requires an encryption dependency. Install one of: sodium-native, sodium, libsodium-wrappers, or tweetnacl.',
+      );
+    }
+
     const channel = await this.fetchVoiceChannel(guildId, channelId);
     const sessionId = `${guildId}:${channelId}`;
 
@@ -195,6 +250,44 @@ export class DiscordGatewayVoiceTransport {
       return { sessionId };
     }
 
+    const botMember =
+      channel.guild.members.me ?? (await channel.guild.members.fetchMe());
+    const perms = channel.permissionsFor(botMember);
+    if (!perms) {
+      throw new Error(
+        `Cannot resolve bot permissions for voice channel ${channelId}`,
+      );
+    }
+
+    const missingPermissions: string[] = [];
+    if (!perms.has(PermissionsBitField.Flags.ViewChannel)) {
+      missingPermissions.push('ViewChannel');
+    }
+    if (!perms.has(PermissionsBitField.Flags.Connect)) {
+      missingPermissions.push('Connect');
+    }
+    if (!perms.has(PermissionsBitField.Flags.Speak)) {
+      missingPermissions.push('Speak');
+    }
+
+    if (missingPermissions.length > 0) {
+      throw new Error(
+        `Missing Discord voice permissions in <#${channelId}>: ${missingPermissions.join(', ')}`,
+      );
+    }
+
+    if (
+      'userLimit' in channel &&
+      typeof channel.userLimit === 'number' &&
+      channel.userLimit > 0 &&
+      channel.members.size >= channel.userLimit &&
+      !channel.members.has(botMember.id)
+    ) {
+      throw new Error(
+        `Discord voice channel <#${channelId}> is full (${channel.members.size}/${channel.userLimit}).`,
+      );
+    }
+
     const connection = joinVoiceChannel({
       channelId,
       guildId,
@@ -203,7 +296,61 @@ export class DiscordGatewayVoiceTransport {
       selfMute: false,
     });
 
-    await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    connection.on('debug', (message) => {
+      logger.debug(
+        { sessionId, guildId, channelId, message },
+        'Discord voice connection debug',
+      );
+    });
+
+    const stateTransitions: string[] = [connection.state.status];
+    connection.on('stateChange', (oldState, newState) => {
+      const oldDetails = oldState as {
+        status: string;
+        reason?: string;
+        closeCode?: number;
+      };
+      const newDetails = newState as {
+        status: string;
+        reason?: string;
+        closeCode?: number;
+      };
+      stateTransitions.push(newState.status);
+      logger.debug(
+        {
+          sessionId,
+          guildId,
+          channelId,
+          oldState: oldState.status,
+          newState: newState.status,
+          oldReason: oldDetails.reason,
+          newReason: newDetails.reason,
+          oldCloseCode: oldDetails.closeCode,
+          newCloseCode: newDetails.closeCode,
+        },
+        'Discord voice connection state changed',
+      );
+    });
+
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    } catch (err) {
+      logger.error(
+        {
+          err,
+          sessionId,
+          guildId,
+          channelId,
+          stateTransitions,
+        },
+        'Discord voice connection failed to reach ready state',
+      );
+      connection.destroy();
+      throw new Error(
+        `Timed out connecting to Discord voice channel <#${channelId}>. States: ${stateTransitions.join(' -> ')}. Check bot permissions and voice channel access.`,
+      );
+    }
+
     logger.info(
       { sessionId, guildId, channelId },
       'Discord voice connection ready',

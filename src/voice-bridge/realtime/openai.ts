@@ -134,11 +134,11 @@ class OpenAIRealtimeSession implements RealtimeSession {
 
   async appendInputAudio(pcm16: Buffer, sampleRate: number): Promise<void> {
     this.assertSocket();
+    void sampleRate;
     this.socket!.send(
       JSON.stringify({
         type: 'input_audio_buffer.append',
         audio: pcm16.toString('base64'),
-        sample_rate_hz: sampleRate,
       }),
     );
   }
@@ -251,6 +251,29 @@ class OpenAIRealtimeSession implements RealtimeSession {
         break;
       }
       case 'error': {
+        const errorPayload =
+          typeof event.error === 'object' && event.error !== null
+            ? (event.error as Record<string, unknown>)
+            : null;
+        const errorCode =
+          errorPayload && typeof errorPayload.code === 'string'
+            ? errorPayload.code
+            : undefined;
+        const errorMessage =
+          errorPayload && typeof errorPayload.message === 'string'
+            ? errorPayload.message
+            : typeof event.message === 'string'
+              ? event.message
+              : 'Unknown error';
+
+        if (errorCode === 'response_cancel_not_active') {
+          logger.debug(
+            { sessionId: this.sessionId, event },
+            'OpenAI realtime response cancel ignored (no active response)',
+          );
+          break;
+        }
+
         logger.error(
           { sessionId: this.sessionId, event },
           'OpenAI realtime API returned an error event',
@@ -258,8 +281,7 @@ class OpenAIRealtimeSession implements RealtimeSession {
         this.emitter.emit('event', {
           type: 'session.error',
           sessionId: this.sessionId,
-          error:
-            typeof event.message === 'string' ? event.message : 'Unknown error',
+          error: errorMessage,
         } satisfies RealtimeEvent);
         break;
       }

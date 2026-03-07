@@ -17,7 +17,7 @@ import {
   shutdownPostHog,
 } from './agent-runner/runtime';
 import { initializeVoiceBridge } from './voice-bridge/bootstrap';
-import { createDiscordVoiceIntegration } from './voice-bridge/discord-service';
+import { createDiscordVoiceIntegration } from './voice-bridge/discord-service.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router';
