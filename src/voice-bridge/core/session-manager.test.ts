@@ -11,7 +11,11 @@ const dbFns = {
 };
 
 const resolveVoiceAgent = vi.fn();
-const executeTool = vi.fn(async () => ({ ok: true }));
+const executeTool = vi.fn(
+  async (): Promise<Record<string, unknown>> => ({
+    ok: true,
+  }),
+);
 
 vi.mock('../../db.js', () => dbFns);
 vi.mock('./route-resolver.js', () => ({ resolveVoiceAgent }));
@@ -20,6 +24,13 @@ vi.mock('../realtime/nanoclaw-tools.js', () => ({
     definitions: [],
     execute: executeTool,
   })),
+  isLeaveCallToolResult: vi.fn(
+    (value: unknown) =>
+      typeof value === 'object' &&
+      value !== null &&
+      'leaveCall' in value &&
+      (value as { leaveCall?: unknown }).leaveCall === true,
+  ),
 }));
 
 class FakeAdapter extends EventEmitter {
@@ -42,6 +53,7 @@ class FakeRealtimeSession extends EventEmitter {
   appendInputAudio = vi.fn(async () => undefined);
   interrupt = vi.fn(async () => undefined);
   sendToolResult = vi.fn(async () => undefined);
+  addMessage = vi.fn(async () => undefined);
   close = vi.fn(async () => undefined);
   onEvent(handler: (event: any) => void): void {
     this.on('event', handler);
@@ -137,6 +149,57 @@ describe('VoiceBridgeSessionManager', () => {
         text: 'hello',
       });
       expect(realtime.sendToolResult).toHaveBeenCalled();
+    });
+  });
+
+  it('leaves the call when the realtime model requests it', async () => {
+    executeTool.mockResolvedValueOnce({
+      ok: true,
+      leaveCall: true,
+      message: 'Leaving the call now.',
+    });
+
+    const adapter = new FakeAdapter();
+    const realtime = new FakeRealtimeSession();
+    const { VoiceBridgeSessionManager } = await import('./session-manager.js');
+    const manager = new VoiceBridgeSessionManager(
+      {
+        sendMessage: async () => undefined,
+        schedulerDeps: {
+          agents: async () => ({}),
+          getSessions: async () => ({}),
+          runAgent: async () => ({ status: 'success', result: 'ok' }),
+          sendMessage: async () => undefined,
+        },
+      },
+      {
+        create: () => realtime as any,
+      },
+    );
+    manager.registerAdapter(adapter as any);
+
+    const record = await manager.startSession({
+      platform: 'discord',
+      mode: 'direct',
+      targetId: 'user-1',
+      routeKey: 'voice:discord:dm:user-1',
+    });
+
+    realtime.emit('event', {
+      type: 'tool.call',
+      sessionId: record.voiceSessionId,
+      callId: 'call-leave',
+      toolName: 'leave_call',
+      arguments: {},
+    });
+
+    await vi.waitFor(() => {
+      expect(realtime.sendToolResult).toHaveBeenCalledWith(
+        'call-leave',
+        expect.objectContaining({ leaveCall: true }),
+      );
+      expect(realtime.close).toHaveBeenCalled();
+      expect(adapter.stopSession).toHaveBeenCalledWith('platform-session-1');
     });
   });
 });

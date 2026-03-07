@@ -13,7 +13,11 @@ import {
   estimatePcmDurationMs,
   voiceStreamDiagnosticsEnabled,
 } from '../diagnostics.js';
-import { createRealtimeToolBridge } from '../realtime/nanoclaw-tools.js';
+import {
+  createRealtimeToolBridge,
+  type DelegatedTaskUpdate,
+  isLeaveCallToolResult,
+} from '../realtime/nanoclaw-tools.js';
 import {
   RealtimeSessionFactory,
   VoiceBridgeDependencies,
@@ -248,9 +252,13 @@ export class VoiceBridgeSessionManager {
       isMain: Boolean(input.agent.isMain),
       routeKey: record.routeKey,
       linkedTextThreadId: record.linkedTextThreadId,
+      linkedTextSessionId: record.linkedTextSessionId,
       deps: {
         sendMessage: this.deps.sendMessage,
         schedulerDeps: this.deps.schedulerDeps,
+      },
+      onDelegatedTaskUpdate: async (update) => {
+        await this.handleDelegatedTaskUpdate(record.voiceSessionId, update);
       },
     });
 
@@ -526,6 +534,13 @@ export class VoiceBridgeSessionManager {
             event.arguments,
           );
           await active.realtime.sendToolResult(event.callId, result);
+          if (isLeaveCallToolResult(result)) {
+            logger.info(
+              { voiceSessionId, callId: event.callId },
+              'Realtime model requested call leave',
+            );
+            await this.stopSession(voiceSessionId);
+          }
         } catch (err) {
           logger.error(
             {
@@ -588,8 +603,8 @@ export class VoiceBridgeSessionManager {
         this.clearSessionSpeechState(voiceSessionId);
         this.lastSpeechStoppedAtMs.delete(voiceSessionId);
         this.activeResponseBySession.delete(voiceSessionId);
-        this.activeSessions.delete(voiceSessionId);
         this.outputDiagnosticsBySession.delete(voiceSessionId);
+        this.activeSessions.delete(voiceSessionId);
         break;
       case 'session.closed':
         logger.info({ voiceSessionId }, 'Realtime voice session closed');
@@ -603,6 +618,42 @@ export class VoiceBridgeSessionManager {
       default:
         break;
     }
+  }
+
+  private async handleDelegatedTaskUpdate(
+    voiceSessionId: string,
+    update: DelegatedTaskUpdate,
+  ): Promise<void> {
+    const active = this.activeSessions.get(voiceSessionId);
+    if (!active) {
+      logger.debug(
+        { voiceSessionId, taskId: update.taskId, status: update.status },
+        'Skipping delegated task update for inactive voice session',
+      );
+      return;
+    }
+
+    logger.info(
+      {
+        voiceSessionId,
+        taskId: update.taskId,
+        agentId: update.agentId,
+        status: update.status,
+        announce: update.announce,
+      },
+      'Injecting delegated task update into realtime session',
+    );
+
+    appendVoiceTranscript({
+      voiceSessionId,
+      role: 'system',
+      content: update.message,
+      createdAt: new Date().toISOString(),
+    });
+
+    await active.realtime.addMessage('system', update.message, {
+      triggerResponse: update.announce,
+    });
   }
 
   private scheduleSpeechInterrupt(
