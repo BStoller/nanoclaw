@@ -10,9 +10,13 @@ import type { VoiceBridgeSessionManager } from './core/session-manager.js';
 let discordVoiceManager: VoiceBridgeSessionManager | null = null;
 let discordVoiceTransport: DiscordGatewayVoiceTransport | null = null;
 
-function getMessageVoiceChannel(
-  message: Message,
-): { guildId: string; channelId: string; member: GuildMember } | null {
+interface VoiceState {
+  guildId: string;
+  channelId: string;
+  member: GuildMember;
+}
+
+function getMessageVoiceChannel(message: Message): VoiceState | null {
   if (
     !message.guildId ||
     !message.member ||
@@ -254,6 +258,7 @@ export async function createDiscordVoiceIntegration(
   discordVoiceTransport = transport;
   logger.info('Creating Discord voice integration');
 
+  // Handle text command variants for backward compatibility
   transport.getClient().on('messageCreate', async (message) => {
     if (message.author.bot || !message.guildId) {
       return;

@@ -142,6 +142,9 @@ export class DiscordGatewayVoiceTransport {
     this.readyPromise = new Promise<void>((resolve, reject) => {
       this.client.once('ready', async () => {
         try {
+          // Register slash commands for voice functionality
+          // Note: The Chat SDK has its own handlers for other commands (clear, status, etc.)
+          // but voice commands are Discord-specific and handled here
           await this.registerCommands();
           logger.info(
             {
