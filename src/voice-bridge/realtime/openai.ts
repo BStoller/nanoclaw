@@ -46,11 +46,25 @@ class OpenAIRealtimeSession implements RealtimeSession {
 
   async connect(config: RealtimeSessionConfig): Promise<void> {
     if (this.socket) {
+      logger.debug(
+        { sessionId: this.sessionId },
+        'Realtime session already connected',
+      );
       return;
     }
 
     const url = new URL('wss://api.openai.com/v1/realtime');
     url.searchParams.set('model', config.model);
+
+    logger.info(
+      {
+        sessionId: this.sessionId,
+        model: config.model,
+        voice: config.voice,
+        toolCount: config.tools.length,
+      },
+      'Connecting OpenAI realtime session',
+    );
 
     await new Promise<void>((resolve, reject) => {
       let settled = false;
@@ -58,6 +72,10 @@ class OpenAIRealtimeSession implements RealtimeSession {
       this.socket = socket;
 
       socket.on('open', () => {
+        logger.info(
+          { sessionId: this.sessionId, model: config.model },
+          'OpenAI realtime socket opened',
+        );
         socket.send(
           JSON.stringify({
             type: 'session.update',
@@ -102,6 +120,10 @@ class OpenAIRealtimeSession implements RealtimeSession {
       });
 
       socket.on('close', () => {
+        logger.info(
+          { sessionId: this.sessionId },
+          'OpenAI realtime socket closed',
+        );
         this.emitter.emit('event', {
           type: 'session.closed',
           sessionId: this.sessionId,
@@ -123,11 +145,16 @@ class OpenAIRealtimeSession implements RealtimeSession {
 
   async interrupt(): Promise<void> {
     this.assertSocket();
+    logger.debug({ sessionId: this.sessionId }, 'Cancelling realtime response');
     this.socket!.send(JSON.stringify({ type: 'response.cancel' }));
   }
 
   async sendToolResult(callId: string, result: unknown): Promise<void> {
     this.assertSocket();
+    logger.debug(
+      { sessionId: this.sessionId, callId },
+      'Sending realtime tool result to model',
+    );
     this.socket!.send(
       JSON.stringify({
         type: 'conversation.item.create',
@@ -142,6 +169,10 @@ class OpenAIRealtimeSession implements RealtimeSession {
   }
 
   async close(): Promise<void> {
+    logger.info(
+      { sessionId: this.sessionId },
+      'Closing OpenAI realtime session',
+    );
     this.socket?.close();
     this.socket = null;
   }
@@ -187,6 +218,14 @@ class OpenAIRealtimeSession implements RealtimeSession {
       case 'response.output_item.done': {
         const item = event.item as Record<string, unknown> | undefined;
         if (item?.type === 'function_call') {
+          logger.info(
+            {
+              sessionId: this.sessionId,
+              toolName: item.name,
+              callId: item.call_id,
+            },
+            'OpenAI realtime requested tool call',
+          );
           this.emitter.emit('event', {
             type: 'tool.call',
             sessionId: this.sessionId,
@@ -201,6 +240,10 @@ class OpenAIRealtimeSession implements RealtimeSession {
         break;
       }
       case 'response.cancelled': {
+        logger.debug(
+          { sessionId: this.sessionId },
+          'OpenAI realtime response cancelled',
+        );
         this.emitter.emit('event', {
           type: 'response.interrupted',
           sessionId: this.sessionId,
@@ -208,6 +251,10 @@ class OpenAIRealtimeSession implements RealtimeSession {
         break;
       }
       case 'error': {
+        logger.error(
+          { sessionId: this.sessionId, event },
+          'OpenAI realtime API returned an error event',
+        );
         this.emitter.emit('event', {
           type: 'session.error',
           sessionId: this.sessionId,

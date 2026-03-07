@@ -19,6 +19,7 @@ import {
   GatewayIntentBits,
   GuildBasedChannel,
   GuildMember,
+  Partials,
   REST,
   Routes,
   SlashCommandBuilder,
@@ -110,7 +111,10 @@ export class DiscordGatewayVoiceTransport {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildVoiceStates,
         GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent,
       ],
+      partials: [Partials.Channel],
     });
 
     this.client.on('voiceStateUpdate', (oldState, newState) => {
@@ -124,19 +128,38 @@ export class DiscordGatewayVoiceTransport {
 
   async connect(): Promise<void> {
     if (this.readyPromise) {
+      logger.debug('Reusing existing Discord voice client connection promise');
       return await this.readyPromise;
     }
+
+    logger.info(
+      {
+        commandGuildId: this.commandGuildId,
+      },
+      'Connecting Discord voice transport',
+    );
 
     this.readyPromise = new Promise<void>((resolve, reject) => {
       this.client.once('ready', async () => {
         try {
           await this.registerCommands();
+          logger.info(
+            {
+              botUserId: this.client.user?.id,
+              botUsername: this.client.user?.username,
+            },
+            'Discord voice transport ready',
+          );
           resolve();
         } catch (err) {
+          logger.error({ err }, 'Failed to initialize Discord voice transport');
           reject(err);
         }
       });
-      this.client.once('error', reject);
+      this.client.once('error', (err) => {
+        logger.error({ err }, 'Discord client emitted an error during startup');
+        reject(err);
+      });
     });
 
     await this.client.login(this.token);
@@ -144,6 +167,7 @@ export class DiscordGatewayVoiceTransport {
   }
 
   async startDirectSession(targetId: string): Promise<{ sessionId: string }> {
+    logger.debug({ targetId }, 'Starting Discord direct voice session');
     return await this.joinExistingSession(targetId);
   }
 
@@ -158,7 +182,13 @@ export class DiscordGatewayVoiceTransport {
     const channel = await this.fetchVoiceChannel(guildId, channelId);
     const sessionId = `${guildId}:${channelId}`;
 
+    logger.info(
+      { guildId, channelId, sessionId, targetId },
+      'Joining Discord voice channel',
+    );
+
     if (this.sessions.has(sessionId)) {
+      logger.warn({ sessionId }, 'Discord voice session already active');
       return { sessionId };
     }
 
@@ -171,6 +201,10 @@ export class DiscordGatewayVoiceTransport {
     });
 
     await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
+    logger.info(
+      { sessionId, guildId, channelId },
+      'Discord voice connection ready',
+    );
 
     const player = createAudioPlayer();
     const outputStream = new PassThrough();
@@ -211,6 +245,7 @@ export class DiscordGatewayVoiceTransport {
     });
 
     connection.on(VoiceConnectionStatus.Disconnected, () => {
+      logger.warn({ sessionId }, 'Discord voice connection disconnected');
       this.cleanupSession(sessionId, 'disconnected');
     });
 
@@ -219,6 +254,10 @@ export class DiscordGatewayVoiceTransport {
       if (!this.sessions.has(sessionId)) {
         return;
       }
+      logger.debug(
+        { sessionId },
+        'Discord audio player went idle; resetting output stream',
+      );
       this.resetOutputStream(sessionId);
     });
 
@@ -237,14 +276,33 @@ export class DiscordGatewayVoiceTransport {
       platform: 'discord',
     } satisfies VoiceEvent);
 
+    logger.info(
+      {
+        sessionId,
+        guildId,
+        channelId,
+        memberCount: channel.members.size,
+      },
+      'Discord voice session started',
+    );
+
     return { sessionId };
   }
 
   async stopSession(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
+      logger.warn(
+        { sessionId },
+        'Attempted to stop unknown Discord voice session',
+      );
       return;
     }
+
+    logger.info(
+      { sessionId, guildId: session.guildId, channelId: session.channelId },
+      'Stopping Discord voice session',
+    );
 
     session.outputStream.end();
     session.player.stop();
@@ -264,6 +322,10 @@ export class DiscordGatewayVoiceTransport {
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
+      logger.error(
+        { sessionId },
+        'Attempted to send audio to unknown Discord session',
+      );
       throw new Error(`Unknown Discord voice session ${sessionId}`);
     }
 
@@ -272,6 +334,7 @@ export class DiscordGatewayVoiceTransport {
   }
 
   async interruptOutput(sessionId: string): Promise<void> {
+    logger.debug({ sessionId }, 'Interrupting Discord voice output');
     this.resetOutputStream(sessionId);
   }
 
@@ -320,12 +383,17 @@ export class DiscordGatewayVoiceTransport {
     guildId: string,
     channelId: string,
   ): Promise<VoiceBasedChannel> {
+    logger.debug({ guildId, channelId }, 'Fetching Discord voice channel');
     const guild = await this.client.guilds.fetch(guildId);
     const channel = (await guild.channels.fetch(
       channelId,
     )) as GuildBasedChannel | null;
 
     if (!channel || !this.isVoiceChannel(channel)) {
+      logger.error(
+        { guildId, channelId },
+        'Discord target channel is not voice-capable',
+      );
       throw new Error(`Channel ${channelId} is not a Discord voice channel`);
     }
 
@@ -346,9 +414,17 @@ export class DiscordGatewayVoiceTransport {
     userId: string,
   ): void {
     if (session.subscribedUsers.has(userId)) {
+      logger.debug(
+        { sessionId: session.sessionId, userId },
+        'Already subscribed to Discord user audio',
+      );
       return;
     }
 
+    logger.debug(
+      { sessionId: session.sessionId, userId },
+      'Subscribing to Discord user audio',
+    );
     session.subscribedUsers.add(userId);
     const opusStream = session.connection.receiver.subscribe(userId, {
       end: {
@@ -374,13 +450,23 @@ export class DiscordGatewayVoiceTransport {
     });
 
     const cleanup = () => {
+      logger.debug(
+        { sessionId: session.sessionId, userId },
+        'Cleaning up Discord user audio subscription',
+      );
       session.subscribedUsers.delete(userId);
       decoder.removeAllListeners();
     };
 
     opusStream.once('end', cleanup);
     opusStream.once('close', cleanup);
-    opusStream.once('error', cleanup);
+    opusStream.once('error', (err) => {
+      logger.warn(
+        { err, sessionId: session.sessionId, userId },
+        'Discord user audio stream errored',
+      );
+      cleanup();
+    });
   }
 
   private async handleVoiceStateUpdate(
@@ -406,6 +492,14 @@ export class DiscordGatewayVoiceTransport {
         newState.channelId === session.channelId
       ) {
         if (newState.member) {
+          logger.info(
+            {
+              sessionId: session.sessionId,
+              participantId: newState.member.id,
+              channelId: session.channelId,
+            },
+            'Discord participant joined active voice channel',
+          );
           this.emitter.emit('event', {
             type: 'participant.joined',
             sessionId: session.sessionId,
@@ -420,6 +514,14 @@ export class DiscordGatewayVoiceTransport {
         newState.channelId !== session.channelId
       ) {
         if (oldState.member) {
+          logger.info(
+            {
+              sessionId: session.sessionId,
+              participantId: oldState.member.id,
+              channelId: session.channelId,
+            },
+            'Discord participant left active voice channel',
+          );
           this.emitter.emit('event', {
             type: 'participant.left',
             sessionId: session.sessionId,
@@ -436,6 +538,16 @@ export class DiscordGatewayVoiceTransport {
       return;
     }
 
+    logger.warn(
+      {
+        sessionId,
+        guildId: session.guildId,
+        channelId: session.channelId,
+        reason,
+      },
+      'Cleaning up Discord voice session',
+    );
+
     session.outputStream.end();
     session.player.stop();
     this.sessions.delete(sessionId);
@@ -449,8 +561,14 @@ export class DiscordGatewayVoiceTransport {
   private resetOutputStream(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) {
+      logger.warn(
+        { sessionId },
+        'Attempted to reset output stream for unknown Discord session',
+      );
       return;
     }
+
+    logger.debug({ sessionId }, 'Resetting Discord output stream');
 
     session.outputStream.end();
     session.outputStream = new PassThrough();

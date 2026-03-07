@@ -6,9 +6,9 @@ export async function resolveVoiceAgent(
   routeKey: string,
 ): Promise<Agent | null> {
   const agentId = await resolveAgentId(routeKey);
-  if (!agentId) {
-    return null;
+  if (agentId) {
+    return (await getAgent(agentId)) ?? null;
   }
 
-  return (await getAgent(agentId)) ?? null;
+  return (await getAgent('main')) ?? null;
 }

@@ -53,6 +53,7 @@ export class VoiceBridgeSessionManager {
   ) {}
 
   registerAdapter(adapter: VoicePlatformAdapter): void {
+    logger.info({ platform: adapter.platform }, 'Registering voice adapter');
     this.adapters.set(adapter.platform, adapter);
     adapter.onEvent((event) => {
       void this.handleAdapterEvent(adapter.platform, event);
@@ -61,7 +62,9 @@ export class VoiceBridgeSessionManager {
 
   async connectAdapters(): Promise<void> {
     for (const adapter of this.adapters.values()) {
+      logger.info({ platform: adapter.platform }, 'Connecting voice adapter');
       await adapter.connect();
+      logger.info({ platform: adapter.platform }, 'Voice adapter connected');
     }
   }
 
@@ -70,8 +73,23 @@ export class VoiceBridgeSessionManager {
   ): Promise<VoiceSessionRecord> {
     const adapter = this.adapters.get(request.platform);
     if (!adapter) {
+      logger.error(
+        { platform: request.platform, routeKey: request.routeKey },
+        'Voice session requested without a registered adapter',
+      );
       throw new Error(`No voice adapter registered for ${request.platform}`);
     }
+
+    logger.info(
+      {
+        platform: request.platform,
+        mode: request.mode,
+        targetId: request.targetId,
+        routeKey: request.routeKey,
+        startedBy: request.startedBy,
+      },
+      'Starting voice session',
+    );
 
     const agent = await this.getAgentOrThrow(request.routeKey);
     const platformSession =
@@ -92,8 +110,22 @@ export class VoiceBridgeSessionManager {
   async stopSession(voiceSessionId: string): Promise<void> {
     const active = this.activeSessions.get(voiceSessionId);
     if (!active) {
+      logger.warn(
+        { voiceSessionId },
+        'Attempted to stop unknown voice session',
+      );
       return;
     }
+
+    logger.info(
+      {
+        voiceSessionId,
+        platform: active.record.platform,
+        platformSessionId: active.record.platformSessionId,
+        routeKey: active.record.routeKey,
+      },
+      'Stopping voice session',
+    );
 
     await active.realtime.close();
     await active.adapter.stopSession(active.record.platformSessionId);
@@ -158,6 +190,19 @@ export class VoiceBridgeSessionManager {
       metadata: input.request.metadata,
     };
 
+    logger.info(
+      {
+        voiceSessionId,
+        platform: record.platform,
+        platformSessionId: record.platformSessionId,
+        routeKey: record.routeKey,
+        agentId: record.agentId,
+        participantCount: input.request.participants?.length ?? 0,
+        linkedTextThreadId: record.linkedTextThreadId,
+      },
+      'Created voice session record',
+    );
+
     upsertVoiceSession(record);
 
     for (const participant of input.request.participants ?? []) {
@@ -193,6 +238,16 @@ export class VoiceBridgeSessionManager {
       tools: toolBridge.definitions,
     });
 
+    logger.info(
+      {
+        voiceSessionId,
+        model: process.env.OPENAI_REALTIME_MODEL || 'gpt-realtime',
+        voice: process.env.OPENAI_REALTIME_VOICE || 'alloy',
+        toolCount: toolBridge.definitions.length,
+      },
+      'Realtime voice session connected',
+    );
+
     this.activeSessions.set(voiceSessionId, {
       record,
       adapter: input.adapter,
@@ -222,11 +277,23 @@ export class VoiceBridgeSessionManager {
     );
 
     if (!active) {
+      logger.debug(
+        { platform, platformSessionId: event.sessionId, eventType: event.type },
+        'Ignoring adapter event for unknown voice session',
+      );
       return;
     }
 
     switch (event.type) {
       case 'participant.joined':
+        logger.info(
+          {
+            voiceSessionId: active.record.voiceSessionId,
+            participantId: event.participantId,
+            displayName: event.displayName,
+          },
+          'Voice participant joined',
+        );
         await upsertVoiceParticipant({
           voiceSessionId: active.record.voiceSessionId,
           participantId: event.participantId,
@@ -235,6 +302,13 @@ export class VoiceBridgeSessionManager {
         });
         break;
       case 'participant.left':
+        logger.info(
+          {
+            voiceSessionId: active.record.voiceSessionId,
+            participantId: event.participantId,
+          },
+          'Voice participant left',
+        );
         markVoiceParticipantLeft(
           active.record.voiceSessionId,
           event.participantId,
@@ -244,10 +318,35 @@ export class VoiceBridgeSessionManager {
         await active.realtime.appendInputAudio(event.pcm16, event.sampleRate);
         break;
       case 'speech.started':
+        logger.debug(
+          {
+            voiceSessionId: active.record.voiceSessionId,
+            participantId: event.participantId,
+          },
+          'User speech started; interrupting assistant output',
+        );
         await active.realtime.interrupt();
         await active.adapter.interruptOutput(active.record.platformSessionId);
         break;
+      case 'speech.stopped':
+        logger.debug(
+          {
+            voiceSessionId: active.record.voiceSessionId,
+            participantId: event.participantId,
+          },
+          'User speech stopped',
+        );
+        break;
       case 'transcript.final':
+        logger.debug(
+          {
+            voiceSessionId: active.record.voiceSessionId,
+            participantId: event.participantId,
+            role: event.role,
+            length: event.text.length,
+          },
+          'Persisting adapter transcript entry',
+        );
         appendVoiceTranscript({
           voiceSessionId: active.record.voiceSessionId,
           participantId: event.participantId,
@@ -257,6 +356,13 @@ export class VoiceBridgeSessionManager {
         });
         break;
       case 'session.ended':
+        logger.warn(
+          {
+            voiceSessionId: active.record.voiceSessionId,
+            reason: event.reason,
+          },
+          'Platform voice session ended',
+        );
         await this.stopSession(active.record.voiceSessionId);
         break;
       default:
@@ -275,6 +381,10 @@ export class VoiceBridgeSessionManager {
   ): Promise<void> {
     const active = this.activeSessions.get(voiceSessionId);
     if (!active) {
+      logger.debug(
+        { voiceSessionId, eventType: event.type },
+        'Ignoring realtime event for unknown voice session',
+      );
       return;
     }
 
@@ -287,6 +397,10 @@ export class VoiceBridgeSessionManager {
         );
         break;
       case 'transcript.final':
+        logger.debug(
+          { voiceSessionId, role: event.role, length: event.text.length },
+          'Persisting realtime transcript entry',
+        );
         appendVoiceTranscript({
           voiceSessionId,
           role: event.role,
@@ -295,11 +409,34 @@ export class VoiceBridgeSessionManager {
         });
         break;
       case 'tool.call': {
-        const result = await toolBridge.execute(
-          event.toolName,
-          event.arguments,
+        logger.info(
+          {
+            voiceSessionId,
+            toolName: event.toolName,
+            callId: event.callId,
+          },
+          'Executing realtime tool call',
         );
-        await active.realtime.sendToolResult(event.callId, result);
+        try {
+          const result = await toolBridge.execute(
+            event.toolName,
+            event.arguments,
+          );
+          await active.realtime.sendToolResult(event.callId, result);
+        } catch (err) {
+          logger.error(
+            {
+              err,
+              voiceSessionId,
+              toolName: event.toolName,
+              callId: event.callId,
+            },
+            'Realtime tool call failed',
+          );
+          await active.realtime.sendToolResult(event.callId, {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
         break;
       }
       case 'session.error':
@@ -310,6 +447,7 @@ export class VoiceBridgeSessionManager {
         markVoiceSessionEnded(voiceSessionId, 'failed');
         break;
       case 'session.closed':
+        logger.info({ voiceSessionId }, 'Realtime voice session closed');
         markVoiceSessionEnded(voiceSessionId, 'ended');
         this.activeSessions.delete(voiceSessionId);
         break;
@@ -321,8 +459,10 @@ export class VoiceBridgeSessionManager {
   private async getAgentOrThrow(routeKey: string): Promise<Agent> {
     const agent = await resolveVoiceAgent(routeKey);
     if (!agent) {
+      logger.error({ routeKey }, 'No agent resolved for voice route');
       throw new Error(`No agent configured for voice route ${routeKey}`);
     }
+    logger.debug({ routeKey, agentId: agent.id }, 'Resolved voice agent');
     return agent;
   }
 }

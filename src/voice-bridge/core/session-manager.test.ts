@@ -50,7 +50,14 @@ class FakeRealtimeSession extends EventEmitter {
 
 describe('VoiceBridgeSessionManager', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    dbFns.appendVoiceTranscript.mockReset();
+    dbFns.markVoiceParticipantLeft.mockReset();
+    dbFns.markVoiceSessionEnded.mockReset();
+    dbFns.upsertVoiceParticipant.mockReset();
+    dbFns.upsertVoiceSession.mockReset();
+    resolveVoiceAgent.mockReset();
+    executeTool.mockReset();
+    executeTool.mockResolvedValue({ ok: true });
     resolveVoiceAgent.mockResolvedValue({
       id: 'main',
       folder: 'main',
