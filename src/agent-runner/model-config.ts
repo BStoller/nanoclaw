@@ -27,6 +27,14 @@ const MODEL_CONFIGS: Record<string, ModelConfig> = {
     compactionThresholdPercent: 60,
     supportsVision: true,
   },
+  'opencode-zen:gpt-5.4': {
+    provider: 'opencode-zen',
+    modelName: 'gpt-5.4',
+    isOpenAIResponseFormat: true,
+    contextWindow: 400000,
+    compactionThresholdPercent: 60,
+    supportsVision: true,
+  },
 };
 
 export function getAvailableModels(): Array<{
