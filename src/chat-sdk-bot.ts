@@ -213,6 +213,46 @@ async function resolveAgentForJid(chatJid: string): Promise<Agent | null> {
   return (await getAgent(agentId)) ?? null;
 }
 
+const SUPPORTED_COMMANDS = new Set([
+  'clear',
+  'status',
+  'chatid',
+  'update',
+  'voice-join',
+  'voice-leave',
+]);
+
+function getSupportedCommand(content: string): string | null {
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('/')) {
+    return null;
+  }
+
+  const command = trimmed.slice(1).toLowerCase();
+  return SUPPORTED_COMMANDS.has(command) ? command : null;
+}
+
+function getUnroutedStatus(chatJid: string): string {
+  const threadId = jidToThreadId(chatJid);
+  const parsed = extractPlatformAndChannelId(threadId);
+
+  if (!parsed) {
+    return `Status: agent=unrouted session=none thread=${threadId}`;
+  }
+
+  return `Status: agent=unrouted session=none thread=${threadId} platform=${parsed.platform} channel=${parsed.channelId}`;
+}
+
+function getChatIdResponse(chatJid: string): string {
+  const threadId = jidToThreadId(chatJid);
+  return `This channel's ID is: \`${threadId}\`
+
+Add this to your \`ROUTES\` in \`src/router.ts\`:
+\`\`\`typescript
+'${chatJid}': 'main',
+\`\`\``;
+}
+
 /**
  * Add 👀 reaction to show we're processing
  */
@@ -628,12 +668,21 @@ async function executeCommand(
   command: string,
   sender?: string,
 ): Promise<string> {
+  const normalizedCommand = command.toLowerCase().replace(/^\//, '');
+
+  if (normalizedCommand === 'chatid') {
+    return getChatIdResponse(chatJid);
+  }
+
   const agent = await resolveAgentForJid(chatJid);
+
+  if (!agent && normalizedCommand === 'status') {
+    return getUnroutedStatus(chatJid);
+  }
+
   if (!agent) {
     return `No agent configured for this channel. Please add a route in src/router.ts.`;
   }
-
-  const normalizedCommand = command.toLowerCase().replace(/^\//, '');
 
   if (normalizedCommand === 'clear') {
     const targetJids = await resolveClearTargetJids(chatJid);
@@ -657,14 +706,6 @@ async function executeCommand(
     const lastTs =
       (await getSessionLastTimestamp(chatJid, session.sessionId)) || 'none';
     return `Status: agent=${agent.id} session=${session.sessionId} model=${modelProvider}/${modelName} messages=${messageCount} tokens=${tokenCount} last=${lastTs}`;
-  } else if (normalizedCommand === 'chatid') {
-    const threadId = jidToThreadId(chatJid);
-    return `This channel's ID is: \`${threadId}\`
-
-Add this to your \`ROUTES\` in \`src/router.ts\`:
-\`\`\`typescript
-'${chatJid}': 'main',
-\`\`\``;
   } else if (normalizedCommand === 'update') {
     // Authorization check would go here
     const pendingPath = path.join(DATA_DIR, 'update-pending.json');
@@ -774,6 +815,17 @@ export async function createChatSdkBot(): Promise<Chat> {
       'incoming onNewMention',
     );
 
+    const command = getSupportedCommand(message.text || '');
+    if (command) {
+      const response = await executeCommand(
+        thread.id,
+        command,
+        message.author?.userId,
+      );
+      await thread.post(response);
+      return;
+    }
+
     const agent = await resolveAgentForJid(thread.id);
 
     if (!agent) {
@@ -837,6 +889,17 @@ export async function createChatSdkBot(): Promise<Chat> {
 
   // Handle subscribed messages (follow-ups in same thread)
   bot.onSubscribedMessage(async (thread, message) => {
+    const command = getSupportedCommand(message.text || '');
+    if (command) {
+      const response = await executeCommand(
+        thread.id,
+        command,
+        message.author?.userId,
+      );
+      await thread.post(response);
+      return;
+    }
+
     const agent = await resolveAgentForJid(thread.id);
 
     if (!agent) {
@@ -866,30 +929,6 @@ export async function createChatSdkBot(): Promise<Chat> {
         } else {
           content = mediaNotes.join('\n');
         }
-      }
-    }
-
-    // Check for commands
-    const trimmed = content.trim();
-    if (trimmed.startsWith('/')) {
-      const command = trimmed.slice(1).toLowerCase();
-      if (
-        [
-          'clear',
-          'status',
-          'chatid',
-          'update',
-          'voice-join',
-          'voice-leave',
-        ].includes(command)
-      ) {
-        const response = await executeCommand(
-          thread.id,
-          command,
-          message.author?.userId,
-        );
-        await thread.post(response);
-        return;
       }
     }
 
@@ -947,6 +986,17 @@ export async function createChatSdkBot(): Promise<Chat> {
         { threadId: thread.id },
         'Skipping message - already subscribed',
       );
+      return;
+    }
+
+    const command = getSupportedCommand(message.text || '');
+    if (command) {
+      const response = await executeCommand(
+        thread.id,
+        command,
+        message.author?.userId,
+      );
+      await thread.post(response);
       return;
     }
 
