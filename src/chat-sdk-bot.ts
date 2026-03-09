@@ -1,4 +1,11 @@
-import { Chat, type Thread, type Message, type SlashCommandEvent } from 'chat';
+import {
+  Chat,
+  type Thread,
+  type Message,
+  type SlashCommandEvent,
+  type AdapterPostableMessage,
+  type RawMessage,
+} from 'chat';
 import { createDiscordAdapter } from '@chat-adapter/discord';
 import { createSlackAdapter } from '@chat-adapter/slack';
 import { createSQLiteState } from './chat-sdk-state-sqlite.js';
@@ -30,6 +37,7 @@ import { createAgentRuntime, AgentInput } from './agent-runner/runtime.js';
 import type { Agent, Attachment as InternalAttachment } from './types.js';
 import { saveAttachment, buildMediaNote } from './attachments/store.js';
 import { getMimeTypeFromExtension } from './attachments/images.js';
+import { splitOutboundMessageForPlatform } from './outbound-message.js';
 import {
   handleDiscordVoiceJoinCommand,
   handleDiscordVoiceLeaveCommand,
@@ -81,6 +89,48 @@ class PinoLoggerAdapter implements ChatLogger {
       this.pinoLogger.warn({ prefix: this.prefix }, message);
     }
   }
+}
+
+function wrapDiscordAdapterForLongMessages(
+  adapter: ReturnType<typeof createDiscordAdapter>,
+): ReturnType<typeof createDiscordAdapter> {
+  const originalPostMessage = adapter.postMessage.bind(adapter);
+
+  adapter.postMessage = async (
+    threadId: string,
+    message: AdapterPostableMessage,
+  ): Promise<RawMessage<unknown>> => {
+    if (typeof message !== 'string') {
+      return originalPostMessage(threadId, message);
+    }
+
+    const chunks = splitOutboundMessageForPlatform('discord', message);
+    if (chunks.length === 1) {
+      return originalPostMessage(threadId, message);
+    }
+
+    logger.info(
+      {
+        threadId,
+        messageLength: message.length,
+        chunkCount: chunks.length,
+      },
+      'Splitting long Discord message into chunks',
+    );
+
+    let lastMessage: RawMessage<unknown> | null = null;
+    for (const chunk of chunks) {
+      lastMessage = await originalPostMessage(threadId, chunk);
+    }
+
+    if (!lastMessage) {
+      throw new Error('Failed to send Discord message chunks');
+    }
+
+    return lastMessage;
+  };
+
+  return adapter;
 }
 
 // State management
@@ -782,9 +832,11 @@ export async function createChatSdkBot(): Promise<Chat> {
 
   // Configure Discord adapter if token is provided
   if (process.env.DISCORD_BOT_TOKEN) {
-    adapters.discord = createDiscordAdapter({
-      logger: new PinoLoggerAdapter(logger),
-    });
+    adapters.discord = wrapDiscordAdapterForLongMessages(
+      createDiscordAdapter({
+        logger: new PinoLoggerAdapter(logger),
+      }),
+    );
   }
 
   // Configure Slack adapter if token is provided
