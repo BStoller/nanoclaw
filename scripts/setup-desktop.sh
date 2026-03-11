@@ -13,6 +13,9 @@ SYSTEMD_SYSTEM_DIR="/etc/systemd/system"
 SYSTEMD_USER_DIR="${USER_HOME}/.config/systemd/user"
 ENV_FILE="${USER_HOME}/nanoclaw/.env"
 VNC_PASSWD="${USER_HOME}/.vnc/passwd"
+REMOTE_DESKTOP_PASSWORD="password"
+XRDP_CONFIG_DIR="/etc/xrdp"
+XRDP_INI="${XRDP_CONFIG_DIR}/xrdp.ini"
 XRUNTIME_DIR="/run/user/$(id -u "${USER_NAME}")"
 NODE_MAJOR="22"
 
@@ -32,6 +35,7 @@ ${SUDO} apt-get install -y \
   curl \
   dbus-x11 \
   gpg \
+  xrdp \
   x11vnc \
   xserver-xorg-video-dummy \
   xfce4 \
@@ -108,12 +112,56 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+# Configure xrdp to proxy into the shared x11vnc desktop
+${SUDO} install -d -m 0755 "${XRDP_CONFIG_DIR}"
+${SUDO} tee "${XRDP_INI}" > /dev/null << EOF
+[Globals]
+ini_version=1
+fork=true
+port=3389
+use_vsock=false
+tcp_nodelay=true
+tcp_keepalive=true
+security_layer=negotiate
+crypt_level=high
+bitmap_cache=true
+bitmap_compression=true
+max_bpp=24
+xserverbpp=24
+autorun=shared-vnc
+
+[Logging]
+LogFile=xrdp.log
+LogLevel=INFO
+EnableSyslog=true
+SyslogLevel=INFO
+
+[Channels]
+rdpdr=true
+rdpsnd=true
+drdynvc=true
+cliprdr=true
+rail=true
+xrdpvr=true
+tcutils=true
+
+[shared-vnc]
+name=Shared Desktop
+lib=libvnc.so
+ip=127.0.0.1
+port=5900
+username=na
+password=${REMOTE_DESKTOP_PASSWORD}
+xserverbpp=24
+delay_ms=2000
+EOF
+
 ${SUDO_U} mkdir -p "${SYSTEMD_USER_DIR}"
 ${SUDO_U} install -m 0644 scripts/systemd/chrome-cdp.service "${SYSTEMD_USER_DIR}/chrome-cdp.service"
 ${SUDO_U} install -m 0644 scripts/systemd/nanoclaw.service "${SYSTEMD_USER_DIR}/nanoclaw.service"
 
 ${SUDO_U} mkdir -p "${USER_HOME}/.vnc"
-${SUDO_U} x11vnc -storepasswd password "${VNC_PASSWD}" > /dev/null
+${SUDO_U} x11vnc -storepasswd "${REMOTE_DESKTOP_PASSWORD}" "${VNC_PASSWD}" > /dev/null
 ${SUDO_U} chmod 600 "${VNC_PASSWD}"
 
 if [[ ! -f "${ENV_FILE}" ]]; then
@@ -143,7 +191,7 @@ if [[ "${USER_MANAGER_READY}" != "true" ]]; then
 fi
 
 ${SUDO} systemctl daemon-reload
-${SUDO} systemctl enable --now persistent-desktop.service xfce-desktop.service x11vnc.service
+${SUDO} systemctl enable --now persistent-desktop.service xfce-desktop.service x11vnc.service xrdp.service xrdp-sesman.service
 
 ${SUDO_U} XDG_RUNTIME_DIR="${XRUNTIME_DIR}" systemctl --user daemon-reload
 ${SUDO_U} XDG_RUNTIME_DIR="${XRUNTIME_DIR}" systemctl --user enable --now chrome-cdp.service nanoclaw.service
