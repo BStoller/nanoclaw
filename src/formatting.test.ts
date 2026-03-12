@@ -4,6 +4,7 @@ import {
   escapeXml,
   formatMessages,
   formatOutbound,
+  isNoReply,
   stripReasoningTags,
 } from './router.js';
 import { NewMessage } from './types.js';
@@ -146,5 +147,19 @@ describe('formatOutbound', () => {
     expect(
       formatOutbound('<reasoning>thinking</reasoning>The answer is 42'),
     ).toBe('The answer is 42');
+  });
+});
+
+describe('isNoReply', () => {
+  it('treats NO_REPLY as a suppressed response', () => {
+    expect(isNoReply('NO_REPLY')).toBe(true);
+  });
+
+  it('treats empty text as a suppressed response', () => {
+    expect(isNoReply('   ')).toBe(true);
+  });
+
+  it('does not suppress regular text', () => {
+    expect(isNoReply('hello world')).toBe(false);
   });
 });

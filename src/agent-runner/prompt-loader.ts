@@ -72,7 +72,7 @@ export function getCachedPromptFileContent(filePath: string): string | null {
 
 export function buildAgentSystemPrompt(
   agentId: string,
-  isMain: boolean,
+  _isMain: boolean,
 ): string {
   const agentPromptPath = path.join(AGENTS_DIR, agentId, 'CLAUDE.md');
   const globalPromptPath = path.join(AGENTS_DIR, 'global', 'CLAUDE.md');
@@ -83,11 +83,9 @@ export function buildAgentSystemPrompt(
     parts.push(agentContent.trim());
   }
 
-  if (!isMain) {
-    const globalContent = getCachedPromptFileContent(globalPromptPath);
-    if (globalContent) {
-      parts.push(globalContent.trim());
-    }
+  const globalContent = getCachedPromptFileContent(globalPromptPath);
+  if (globalContent) {
+    parts.push(globalContent.trim());
   }
 
   return parts.filter(Boolean).join('\n\n');

@@ -247,9 +247,10 @@ export function findChannel(
 
 /**
  * Check if text is a NO_REPLY marker.
- * Returns true only if the trimmed text is exactly "NO_REPLY".
+ * Returns true if the trimmed text is empty or exactly "NO_REPLY".
  * Used to suppress agent responses when no user-facing output is needed.
  */
 export function isNoReply(text: string): boolean {
-  return text.trim() === 'NO_REPLY';
+  const trimmed = text.trim();
+  return trimmed === '' || trimmed === 'NO_REPLY';
 }

@@ -12,7 +12,7 @@ import { createSQLiteState } from './chat-sdk-state-sqlite.js';
 import { ASSISTANT_NAME, DATA_DIR } from './config.js';
 import { logger } from './logger.js';
 import type { Logger as ChatLogger } from 'chat';
-import { resolveAgentId, formatOutbound } from './router.js';
+import { resolveAgentId, formatOutbound, isNoReply } from './router.js';
 import {
   storeMessage,
   storeAttachment,
@@ -306,6 +306,10 @@ Add this to your \`ROUTES\` in \`src/router.ts\`:
 /**
  * Add 👀 reaction to show we're processing
  */
+function getAcknowledgementReaction(thread: Thread): string {
+  return thread.adapter.name === 'slack' ? 'eyes' : '👀';
+}
+
 async function addAcknowledgement(
   thread: Thread,
   messageId: string,
@@ -314,8 +318,9 @@ async function addAcknowledgement(
     // React with 👀 using the thread's raw adapter if available
     // The Discord adapter exposes methods through the adapter property
     const adapter = thread.adapter;
+    const reaction = getAcknowledgementReaction(thread);
 
-    await adapter.addReaction(thread.id, messageId, '👀');
+    await adapter.addReaction(thread.id, messageId, reaction);
 
     // Set safety timeout to auto-remove after 5 minutes
     const timeout = setTimeout(
@@ -348,7 +353,8 @@ async function clearAcknowledgement(
 
   try {
     const adapter = thread.adapter;
-    await adapter.removeReaction(thread.id, messageId, '👀');
+    const reaction = getAcknowledgementReaction(thread);
+    await adapter.removeReaction(thread.id, messageId, reaction);
   } catch (err) {
     logger.debug(
       { threadId: thread.id, messageId, err },
@@ -586,22 +592,20 @@ async function runAgent(
   try {
     const output = await agentRuntime.run(input);
 
-    if (output.status === 'success' && output.result) {
-      // Clear acknowledgement before sending
-      await clearAcknowledgement(thread, messageId);
+    if (output.status === 'success') {
+      if (output.result && !isNoReply(output.result)) {
+        // Send the response
+        await thread.post(output.result);
 
-      // Send the response
-      await thread.post(output.result);
-
-      // Update timestamp in DB
-      const lastAgentTimestamps = await getLastAgentTimestamps();
-      lastAgentTimestamps[chatJid] = new Date().toISOString();
-      setRouterState(
-        'last_agent_timestamp',
-        JSON.stringify(lastAgentTimestamps),
-      );
+        // Update timestamp in DB
+        const lastAgentTimestamps = await getLastAgentTimestamps();
+        lastAgentTimestamps[chatJid] = new Date().toISOString();
+        setRouterState(
+          'last_agent_timestamp',
+          JSON.stringify(lastAgentTimestamps),
+        );
+      }
     } else if (output.status === 'error') {
-      await clearAcknowledgement(thread, messageId);
       logger.error({ chatJid, error: output.error }, 'Agent error');
       await thread.post(
         'Sorry, I encountered an error processing your request.',
@@ -661,9 +665,10 @@ async function runAgent(
       }
     }
   } catch (err) {
-    await clearAcknowledgement(thread, messageId);
     logger.error({ chatJid, err }, 'Failed to run agent');
     await thread.post('Sorry, I encountered an error.');
+  } finally {
+    await clearAcknowledgement(thread, messageId);
   }
 }
 
@@ -842,6 +847,9 @@ export async function createChatSdkBot(): Promise<Chat> {
   // Configure Slack adapter if token is provided
   if (process.env.SLACK_BOT_TOKEN) {
     adapters.slack = createSlackAdapter({
+      botToken: process.env.SLACK_BOT_TOKEN,
+      signingSecret: process.env.SLACK_SIGNING_SECRET,
+      appToken: process.env.SLACK_APP_TOKEN,
       logger: new PinoLoggerAdapter(logger),
     });
   }
@@ -1171,10 +1179,13 @@ export async function createChatSdkBot(): Promise<Chat> {
     }
   }
 
-  // Slack is initialized via webhooks (no gateway listener needed)
-  // The Chat SDK handles webhook routing automatically
+  // Slack initializes via webhooks or Socket Mode inside the adapter
   if (process.env.SLACK_BOT_TOKEN) {
-    logger.info('Slack adapter initialized (webhook mode)');
+    logger.info(
+      process.env.SLACK_APP_TOKEN
+        ? 'Slack adapter initialized (socket mode)'
+        : 'Slack adapter initialized (webhook mode)',
+    );
   }
 
   // Store the bot instance for use by other modules

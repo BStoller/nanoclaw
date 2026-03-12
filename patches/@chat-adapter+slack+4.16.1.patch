@@ -1,0 +1,200 @@
+diff --git a/node_modules/@chat-adapter/slack/dist/index.d.ts b/node_modules/@chat-adapter/slack/dist/index.d.ts
+index 2a6b3e2..08e5aff 100644
+--- a/node_modules/@chat-adapter/slack/dist/index.d.ts
++++ b/node_modules/@chat-adapter/slack/dist/index.d.ts
+@@ -76,6 +76,8 @@ interface SlackAdapterConfig {
+      * If provided, bot tokens stored via setInstallation() will be encrypted at rest.
+      */
+     encryptionKey?: string;
++    /** App-level token (xapp-...) for Socket Mode. */
++    appToken?: string;
+     /**
+      * Prefix for the state key used to store workspace installations.
+      * Defaults to `slack:installation`. The full key will be `{prefix}:{teamId}`.
+@@ -83,8 +85,8 @@ interface SlackAdapterConfig {
+     installationKeyPrefix?: string;
+     /** Logger instance for error reporting */
+     logger: Logger;
+-    /** Signing secret for webhook verification */
+-    signingSecret: string;
++    /** Signing secret for webhook verification. Required in webhook mode. */
++    signingSecret?: string;
+     /** Override bot username (optional) */
+     userName?: string;
+ }
+@@ -149,6 +151,8 @@ declare class SlackAdapter implements Adapter<SlackThreadId, unknown> {
+     readonly userName: string;
+     private readonly client;
+     private readonly signingSecret;
++    private readonly appToken;
++    private socketClient;
+     private readonly defaultBotToken;
+     private chat;
+     private readonly logger;
+@@ -175,6 +179,7 @@ declare class SlackAdapter implements Adapter<SlackThreadId, unknown> {
+      */
+     private withToken;
+     initialize(chat: ChatInstance): Promise<void>;
++    shutdown(): Promise<void>;
+     private installationKey;
+     /**
+      * Save a Slack workspace installation.
+@@ -219,11 +224,14 @@ declare class SlackAdapter implements Adapter<SlackThreadId, unknown> {
+     handleWebhook(request: Request, options?: WebhookOptions): Promise<Response>;
+     /** Extract and dispatch events from a validated payload */
+     private processEventPayload;
++    private dispatchSocketEvent;
++    private ackSocketResponse;
+     /**
+      * Handle Slack interactive payloads (button clicks, view submissions, etc.).
+      * These are sent as form-urlencoded with a `payload` JSON field.
+      */
+     private handleInteractivePayload;
++    private dispatchInteractivePayload;
+     /**
+      * Handle Slack slash command payloads.
+      * Slash commands are sent as form-urlencoded with command, text, user_id, channel_id, etc.
+diff --git a/node_modules/@chat-adapter/slack/dist/index.js b/node_modules/@chat-adapter/slack/dist/index.js
+index c7ab142..1866ddf 100644
+--- a/node_modules/@chat-adapter/slack/dist/index.js
++++ b/node_modules/@chat-adapter/slack/dist/index.js
+@@ -1,4 +1,5 @@
+ // src/index.ts
++import { SocketModeClient } from "@slack/socket-mode";
+ import { AsyncLocalStorage } from "async_hooks";
+ import { createHmac, timingSafeEqual } from "crypto";
+ import {
+@@ -641,6 +642,8 @@ var SlackAdapter = class _SlackAdapter {
+   userName;
+   client;
+   signingSecret;
++  appToken;
++  socketClient;
+   defaultBotToken;
+   chat = null;
+   logger;
+@@ -666,7 +669,8 @@ var SlackAdapter = class _SlackAdapter {
+   }
+   constructor(config) {
+     this.client = new WebClient(config.botToken);
+-    this.signingSecret = config.signingSecret;
++    this.signingSecret = config.signingSecret ?? "";
++    this.appToken = config.appToken;
+     this.defaultBotToken = config.botToken;
+     this.logger = config.logger;
+     this.userName = config.userName || "bot";
+@@ -721,10 +725,70 @@ var SlackAdapter = class _SlackAdapter {
+         this.logger.warn("Could not fetch bot user ID", { error });
+       }
+     }
+-    if (!this.defaultBotToken) {
++    if (this.appToken) {
++      this.socketClient = new SocketModeClient({ appToken: this.appToken });
++      this.socketClient.on("slack_event", (args) => {
++        void this.dispatchSocketEvent(args.type, args.body, args.ack);
++      });
++      await this.socketClient.start();
++      this.logger.info("Slack adapter initialized in Socket Mode");
++    } else if (!this.defaultBotToken) {
+       this.logger.info("Slack adapter initialized in multi-workspace mode");
+     }
+   }
++  async shutdown() {
++    if (this.socketClient) {
++      await this.socketClient.disconnect();
++      this.socketClient = void 0;
++    }
++  }
++  async dispatchSocketEvent(eventType, body, ack) {
++    if (typeof body !== "object" || body === null) {
++      await ack();
++      return;
++    }
++    const payload = body;
++    switch (eventType) {
++      case "events_api":
++        await ack();
++        this.processEventPayload(payload);
++        break;
++      case "slash_commands": {
++        const params = new URLSearchParams();
++        for (const [key, value] of Object.entries(payload)) {
++          if (typeof value === "string") {
++            params.set(key, value);
++          }
++        }
++        const response = await this.handleSlashCommand(params);
++        await this.ackSocketResponse(ack, response);
++        break;
++      }
++      case "interactive": {
++        const response = await this.dispatchInteractivePayload(payload);
++        await this.ackSocketResponse(ack, response);
++        break;
++      }
++      default:
++        await ack();
++    }
++  }
++  async ackSocketResponse(ack, response) {
++    if (!response) {
++      await ack();
++      return;
++    }
++    const responseText = await response.text();
++    if (!responseText) {
++      await ack();
++      return;
++    }
++    try {
++      await ack(JSON.parse(responseText));
++    } catch {
++      await ack();
++    }
++  }
+   // ===========================================================================
+   // Multi-workspace installation management
+   // ===========================================================================
+@@ -923,6 +987,9 @@ var SlackAdapter = class _SlackAdapter {
+     }
+   }
+   async handleWebhook(request, options) {
++    if (this.appToken) {
++      return new Response("Socket Mode is active. This webhook endpoint is not used.", { status: 405 });
++    }
+     const body = await request.text();
+     this.logger.debug("Slack webhook raw body", { body });
+     const timestamp = request.headers.get("x-slack-request-timestamp");
+@@ -1036,6 +1103,9 @@ var SlackAdapter = class _SlackAdapter {
+     } catch {
+       return new Response("Invalid payload JSON", { status: 400 });
+     }
++    return this.dispatchInteractivePayload(payload, options);
++  }
++  dispatchInteractivePayload(payload, options) {
+     switch (payload.type) {
+       case "block_actions":
+         this.handleBlockActions(payload, options);
+@@ -2778,16 +2848,19 @@ var SlackAdapter = class _SlackAdapter {
+   }
+ };
+ function createSlackAdapter(config) {
+-  const signingSecret = config?.signingSecret ?? process.env.SLACK_SIGNING_SECRET;
+-  if (!signingSecret) {
++  const appToken = config?.appToken ?? process.env.SLACK_APP_TOKEN;
++  const isSocketMode = !!appToken;
++  const signingSecret = config?.signingSecret ?? (isSocketMode ? void 0 : process.env.SLACK_SIGNING_SECRET);
++  if (!signingSecret && !isSocketMode) {
+     throw new ValidationError(
+       "slack",
+-      "signingSecret is required. Set SLACK_SIGNING_SECRET or provide it in config."
++      "signingSecret is required in webhook mode. Set SLACK_SIGNING_SECRET, or provide appToken for Socket Mode."
+     );
+   }
+   const zeroConfig = !config;
+   const resolved = {
+     signingSecret,
++    appToken,
+     botToken: config?.botToken ?? (zeroConfig ? process.env.SLACK_BOT_TOKEN : void 0),
+     clientId: config?.clientId ?? (zeroConfig ? process.env.SLACK_CLIENT_ID : void 0),
+     clientSecret: config?.clientSecret ?? (zeroConfig ? process.env.SLACK_CLIENT_SECRET : void 0),
