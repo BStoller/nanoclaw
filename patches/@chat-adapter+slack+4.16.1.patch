@@ -55,7 +55,7 @@ index 2a6b3e2..08e5aff 100644
       * Handle Slack slash command payloads.
       * Slash commands are sent as form-urlencoded with command, text, user_id, channel_id, etc.
 diff --git a/node_modules/@chat-adapter/slack/dist/index.js b/node_modules/@chat-adapter/slack/dist/index.js
-index c7ab142..1866ddf 100644
+index c7ab142..a77e430 100644
 --- a/node_modules/@chat-adapter/slack/dist/index.js
 +++ b/node_modules/@chat-adapter/slack/dist/index.js
 @@ -1,4 +1,5 @@
@@ -83,7 +83,7 @@ index c7ab142..1866ddf 100644
      this.defaultBotToken = config.botToken;
      this.logger = config.logger;
      this.userName = config.userName || "bot";
-@@ -721,10 +725,70 @@ var SlackAdapter = class _SlackAdapter {
+@@ -721,10 +725,83 @@ var SlackAdapter = class _SlackAdapter {
          this.logger.warn("Could not fetch bot user ID", { error });
        }
      }
@@ -111,6 +111,19 @@ index c7ab142..1866ddf 100644
 +      return;
 +    }
 +    const payload = body;
++    this.logger.info("Slack socket event received", {
++      eventType,
++      payloadType: payload.type,
++      slackEventType: payload.event?.type,
++      slackSubtype: payload.event?.subtype,
++      channel: payload.event?.channel,
++      channelType: payload.event?.channel_type,
++      fileCount: Array.isArray(payload.event?.files) ? payload.event.files.length : 0
++    });
++    this.logger.debug("Slack socket event body", {
++      eventType,
++      body: payload
++    });
 +    switch (eventType) {
 +      case "events_api":
 +        await ack();
@@ -155,7 +168,7 @@ index c7ab142..1866ddf 100644
    // ===========================================================================
    // Multi-workspace installation management
    // ===========================================================================
-@@ -923,6 +987,9 @@ var SlackAdapter = class _SlackAdapter {
+@@ -923,6 +1000,9 @@ var SlackAdapter = class _SlackAdapter {
      }
    }
    async handleWebhook(request, options) {
@@ -165,7 +178,32 @@ index c7ab142..1866ddf 100644
      const body = await request.text();
      this.logger.debug("Slack webhook raw body", { body });
      const timestamp = request.headers.get("x-slack-request-timestamp");
-@@ -1036,6 +1103,9 @@ var SlackAdapter = class _SlackAdapter {
+@@ -992,6 +1072,24 @@ var SlackAdapter = class _SlackAdapter {
+   processEventPayload(payload, options) {
+     if (payload.type === "event_callback" && payload.event) {
+       const event = payload.event;
++      this.logger.info("Slack event callback received", {
++        eventType: event.type,
++        subtype: event.subtype,
++        channel: event.channel,
++        channelType: event.channel_type,
++        text: event.text,
++        fileCount: Array.isArray(event.files) ? event.files.length : 0,
++        files: Array.isArray(event.files) ? event.files.map((file) => ({
++          id: file.id,
++          name: file.name,
++          mimetype: file.mimetype,
++          mode: file.mode,
++          file_access: file.file_access
++        })) : []
++      });
++      this.logger.debug("Slack event callback payload", {
++        payload
++      });
+       if (event.type === "message" || event.type === "app_mention") {
+         const slackEvent = event;
+         if (!(slackEvent.team || slackEvent.team_id) && payload.team_id) {
+@@ -1036,6 +1134,9 @@ var SlackAdapter = class _SlackAdapter {
      } catch {
        return new Response("Invalid payload JSON", { status: 400 });
      }
@@ -175,7 +213,117 @@ index c7ab142..1866ddf 100644
      switch (payload.type) {
        case "block_actions":
          this.handleBlockActions(payload, options);
-@@ -2778,16 +2848,19 @@ var SlackAdapter = class _SlackAdapter {
+@@ -1281,9 +1382,34 @@ var SlackAdapter = class _SlackAdapter {
+       this.logger.warn("Chat instance not initialized, ignoring event");
+       return;
+     }
+-    if (event.subtype && event.subtype !== "bot_message") {
+-      this.logger.debug("Ignoring message subtype", {
+-        subtype: event.subtype
++    this.logger.info("Handling Slack message event", {
++      type: event.type,
++      subtype: event.subtype,
++      channel: event.channel,
++      channelType: event.channel_type,
++      ts: event.ts,
++      threadTs: event.thread_ts,
++      text: event.text,
++      fileCount: Array.isArray(event.files) ? event.files.length : 0,
++      files: Array.isArray(event.files) ? event.files.map((file) => ({
++        id: file.id,
++        name: file.name,
++        mimetype: file.mimetype,
++        mode: file.mode,
++        file_access: file.file_access
++      })) : []
++    });
++    if (event.subtype && event.subtype !== "bot_message" && event.subtype !== "file_share") {
++      this.logger.warn("Ignoring Slack message subtype", {
++        subtype: event.subtype,
++        channel: event.channel,
++        channelType: event.channel_type,
++        ts: event.ts,
++        text: event.text,
++        fileCount: Array.isArray(event.files) ? event.files.length : 0
++      });
++      this.logger.debug("Ignored Slack message event payload", {
++        event
+       });
+       return;
+     }
+@@ -1606,7 +1732,7 @@ var SlackAdapter = class _SlackAdapter {
+    * Includes a fetchData method that uses the bot token for auth.
+    */
+   createAttachment(file) {
+-    const url = file.url_private;
++    const url = file.url_private_download || file.url_private;
+     const botToken = this.getToken();
+     let type = "file";
+     if (file.mimetype?.startsWith("image/")) {
+@@ -1625,19 +1751,51 @@ var SlackAdapter = class _SlackAdapter {
+       width: file.original_w,
+       height: file.original_h,
+       fetchData: url ? async () => {
+-        const response = await fetch(url, {
+-          headers: {
+-            Authorization: `Bearer ${botToken}`
++        const isSlackHost = (host) => host === "slack.com" || host.endsWith(".slack.com") || host === "slack-files.com" || host.endsWith(".slack-files.com");
++        let currentUrl = url;
++        for (let redirectCount = 0; redirectCount < 5; redirectCount++) {
++          const target = new URL(currentUrl);
++          const headers = {};
++          if (isSlackHost(target.hostname)) {
++            headers.Authorization = `Bearer ${botToken}`;
+           }
+-        });
+-        if (!response.ok) {
+-          throw new NetworkError(
+-            "slack",
+-            `Failed to fetch file: ${response.status} ${response.statusText}`
+-          );
++          const response = await fetch(currentUrl, {
++            headers,
++            redirect: "manual"
++          });
++          if (response.status >= 300 && response.status < 400) {
++            const location = response.headers.get("location");
++            if (!location) {
++              throw new NetworkError(
++                "slack",
++                `Failed to fetch file: redirect ${response.status} without location`
++              );
++            }
++            currentUrl = new URL(location, currentUrl).toString();
++            continue;
++          }
++          if (!response.ok) {
++            throw new NetworkError(
++              "slack",
++              `Failed to fetch file: ${response.status} ${response.statusText}`
++            );
++          }
++          const arrayBuffer = await response.arrayBuffer();
++          const buffer = Buffer.from(arrayBuffer);
++          const contentType = response.headers.get("content-type") || "";
++          const prefix = buffer.subarray(0, 128).toString("utf8").trimStart().toLowerCase();
++          if (contentType.includes("text/html") || prefix.startsWith("<!doctype html") || prefix.startsWith("<html")) {
++            throw new NetworkError(
++              "slack",
++              `Failed to fetch file: received HTML instead of binary content from ${currentUrl}`
++            );
++          }
++          return buffer;
+         }
+-        const arrayBuffer = await response.arrayBuffer();
+-        return Buffer.from(arrayBuffer);
++        throw new NetworkError(
++          "slack",
++          `Failed to fetch file: too many redirects for ${url}`
++        );
+       } : void 0
+     };
+   }
+@@ -2778,16 +2936,19 @@ var SlackAdapter = class _SlackAdapter {
    }
  };
  function createSlackAdapter(config) {

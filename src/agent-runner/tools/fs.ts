@@ -8,6 +8,7 @@ import { resolveWorkspacePath, WorkspaceContext } from '../workspace-paths.js';
 import {
   isImageFile,
   getMimeTypeFromExtension,
+  detectSupportedImageMediaType,
 } from '../../attachments/images.js';
 
 function resolvePath(
@@ -56,9 +57,25 @@ export function createFsTools(ctx: WorkspaceContext) {
 
         // Check if this is an image file
         if (isImageFile(resolved.resolvedPath)) {
-          const mimeType = getMimeTypeFromExtension(resolved.resolvedPath);
+          const buffer = fs.readFileSync(resolved.resolvedPath);
+          const detectedMimeType = detectSupportedImageMediaType(buffer);
+
+          if (!detectedMimeType) {
+            return {
+              content: `[invalid image file: ${resolved.resolvedPath}]`,
+              totalLines: 1,
+              offset: 1,
+              isImage: false,
+              mimeType: 'application/octet-stream',
+              path: resolved.resolvedPath,
+            };
+          }
+
+          const mimeType =
+            detectedMimeType || getMimeTypeFromExtension(resolved.resolvedPath);
+
           return {
-            base64: fs.readFileSync(resolved.resolvedPath, 'base64'),
+            base64: buffer.toString('base64'),
             content: `[media attached: ${resolved.resolvedPath} (${mimeType})]`,
             totalLines: 1,
             offset: 1,

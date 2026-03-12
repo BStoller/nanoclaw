@@ -20,6 +20,38 @@ export interface ImageData {
   path: string;
 }
 
+function hasPrefix(buffer: Buffer, bytes: number[]): boolean {
+  return bytes.every((byte, index) => buffer[index] === byte);
+}
+
+export function detectSupportedImageMediaType(buffer: Buffer): string | null {
+  if (buffer.length >= 8 && hasPrefix(buffer, [0x89, 0x50, 0x4e, 0x47])) {
+    return 'image/png';
+  }
+
+  if (buffer.length >= 3 && hasPrefix(buffer, [0xff, 0xd8, 0xff])) {
+    return 'image/jpeg';
+  }
+
+  if (
+    buffer.length >= 6 &&
+    (buffer.subarray(0, 6).toString('ascii') === 'GIF87a' ||
+      buffer.subarray(0, 6).toString('ascii') === 'GIF89a')
+  ) {
+    return 'image/gif';
+  }
+
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(0, 4).toString('ascii') === 'RIFF' &&
+    buffer.subarray(8, 12).toString('ascii') === 'WEBP'
+  ) {
+    return 'image/webp';
+  }
+
+  return null;
+}
+
 /**
  * Check if a file path has an image extension
  */
@@ -77,11 +109,18 @@ export async function loadImageAsBase64(
   mimeType: string,
 ): Promise<ImageData> {
   const buffer = await fs.readFile(filePath);
+  const detectedMediaType = detectSupportedImageMediaType(buffer);
+
+  if (!detectedMediaType) {
+    throw new Error(`Unsupported or invalid image data: ${filePath}`);
+  }
+
   const base64 = buffer.toString('base64');
 
   return {
     base64,
-    mediaType: mimeType || getMimeTypeFromExtension(filePath),
+    mediaType:
+      detectedMediaType || mimeType || getMimeTypeFromExtension(filePath),
     path: filePath,
   };
 }
