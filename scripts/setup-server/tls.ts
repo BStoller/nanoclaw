@@ -1,10 +1,13 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import path from 'node:path';
 import { setupLogger } from './logger.js';
 import type { TlsCertificatePaths } from './types.js';
 
 const METADATA_BASE_URL = 'http://169.254.169.254/latest';
-const CERTBOT_ROOT = '/opt/nanoclaw-certbot';
+const CERTBOT_ROOT =
+  process.env.NANOCLAW_CERTBOT_ROOT ??
+  path.join(process.cwd(), '.cache', 'nanoclaw-certbot');
 const CERTBOT_BIN = `${CERTBOT_ROOT}/bin/certbot`;
 const CERTBOT_MIN_VERSION = [5, 4, 0] as const;
 
@@ -106,6 +109,7 @@ async function ensureCertbotBinary(
   }
 
   logger.info('Installing Certbot with IP certificate support');
+  await fs.mkdir(path.dirname(CERTBOT_ROOT), { recursive: true });
   await runCommand('python3', ['-m', 'venv', CERTBOT_ROOT], logger);
   await runCommand(
     `${CERTBOT_ROOT}/bin/pip`,
