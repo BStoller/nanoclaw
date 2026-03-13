@@ -223,8 +223,7 @@ Any file type is supported.
 
 ### Sub-agents and teammates
 
-Use `delegate_to_agent` when you want another agent to handle a focused one-off task in its own isolated context and then return the result back to you.
-
+Use `delegate_to_agent` when you want another agent to handle a focused one-off task in its own isolated context and then return the result to you.
 When working as a sub-agent or teammate, only use `send_message` if instructed to by the main agent.
 
 ## Your Workspace
