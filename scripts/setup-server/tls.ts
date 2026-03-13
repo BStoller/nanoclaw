@@ -5,9 +5,12 @@ import { setupLogger } from './logger.js';
 import type { TlsCertificatePaths } from './types.js';
 
 const METADATA_BASE_URL = 'http://169.254.169.254/latest';
+const CACHE_ROOT = path.join(process.cwd(), '.cache');
 const CERTBOT_ROOT =
   process.env.NANOCLAW_CERTBOT_ROOT ??
-  path.join(process.cwd(), '.cache', 'nanoclaw-certbot');
+  path.join(CACHE_ROOT, 'nanoclaw-certbot');
+const LETSENCRYPT_ROOT =
+  process.env.NANOCLAW_LETSENCRYPT_ROOT ?? path.join(CACHE_ROOT, 'letsencrypt');
 const CERTBOT_BIN = `${CERTBOT_ROOT}/bin/certbot`;
 const CERTBOT_MIN_VERSION = [5, 4, 0] as const;
 
@@ -52,6 +55,7 @@ export async function ensureIpCertificate(
 ): Promise<TlsCertificatePaths> {
   const tlsLogger = setupLogger.child({ component: 'tls', publicIp });
   const certbot = await ensureCertbotBinary(tlsLogger);
+  const directories = await ensureLetsEncryptDirectories();
 
   tlsLogger.info("Requesting Let's Encrypt IP certificate");
 
@@ -65,6 +69,12 @@ export async function ensureIpCertificate(
       '--preferred-profile',
       'shortlived',
       '--keep-until-expiring',
+      '--config-dir',
+      directories.configDir,
+      '--work-dir',
+      directories.workDir,
+      '--logs-dir',
+      directories.logsDir,
       '--standalone',
       '--cert-name',
       publicIp,
@@ -74,8 +84,18 @@ export async function ensureIpCertificate(
     tlsLogger,
   );
 
-  const certPath = `/etc/letsencrypt/live/${publicIp}/fullchain.pem`;
-  const keyPath = `/etc/letsencrypt/live/${publicIp}/privkey.pem`;
+  const certPath = path.join(
+    directories.configDir,
+    'live',
+    publicIp,
+    'fullchain.pem',
+  );
+  const keyPath = path.join(
+    directories.configDir,
+    'live',
+    publicIp,
+    'privkey.pem',
+  );
 
   await fs.access(certPath);
   await fs.access(keyPath);
@@ -132,6 +152,24 @@ async function ensureCertbotBinary(
 
   logger.info({ version: version.join('.') }, 'Certbot installation complete');
   return CERTBOT_BIN;
+}
+
+async function ensureLetsEncryptDirectories(): Promise<{
+  configDir: string;
+  workDir: string;
+  logsDir: string;
+}> {
+  const configDir = path.join(LETSENCRYPT_ROOT, 'config');
+  const workDir = path.join(LETSENCRYPT_ROOT, 'work');
+  const logsDir = path.join(LETSENCRYPT_ROOT, 'logs');
+
+  await Promise.all([
+    fs.mkdir(configDir, { recursive: true }),
+    fs.mkdir(workDir, { recursive: true }),
+    fs.mkdir(logsDir, { recursive: true }),
+  ]);
+
+  return { configDir, workDir, logsDir };
 }
 
 function extractVersion(output: string): number[] | null {
