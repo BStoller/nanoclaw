@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { CronExpressionParser } from 'cron-parser';
 import { z } from 'zod';
 import { tool } from 'ai';
@@ -31,11 +32,118 @@ export interface NanoClawContext {
   chatJid: string;
   agentId: string;
   isMain: boolean;
+  delegationDepth?: number;
 }
 
 export interface NanoClawDeps {
   sendMessage: (jid: string, text: string, sender?: string) => Promise<void>;
   schedulerDeps: SchedulerDependencies;
+}
+
+const MAX_DELEGATION_DEPTH = 1;
+const MAX_DELEGATED_RESULT_CHARS = 12000;
+
+function truncateDelegatedResult(text: string): string {
+  if (text.length <= MAX_DELEGATED_RESULT_CHARS) {
+    return text;
+  }
+
+  return `${text.slice(0, MAX_DELEGATED_RESULT_CHARS)}\n\n[truncated ${text.length - MAX_DELEGATED_RESULT_CHARS} chars]`;
+}
+
+function formatDelegatedPrompt(taskId: string, prompt: string): string {
+  return [
+    `[DELEGATED TASK ${taskId}]`,
+    'You are helping another NanoClaw agent in a separate, isolated context.',
+    'Do the work thoroughly, but return only the useful final result for the requesting agent.',
+    'The requesting agent will decide how to present your result to the user.',
+    '',
+    prompt,
+  ].join('\n');
+}
+
+async function delegateToAgent(
+  deps: NanoClawDeps,
+  ctx: NanoClawContext,
+  input: {
+    agent_id: string;
+    prompt: string;
+  },
+) {
+  const delegationDepth = ctx.delegationDepth ?? 0;
+  if (delegationDepth >= MAX_DELEGATION_DEPTH) {
+    return {
+      error: `Delegation depth limit reached (${MAX_DELEGATION_DEPTH}). Complete the work directly instead of delegating again.`,
+    };
+  }
+
+  const agents = await deps.schedulerDeps.agents();
+  const agent = agents[input.agent_id];
+  if (!agent) {
+    return { error: `Agent "${input.agent_id}" not found.` };
+  }
+
+  const taskId = `delegated-${Date.now()}-${randomUUID().slice(0, 8)}`;
+  const delegatedChatJid = `delegated:${ctx.chatJid}:${taskId}`;
+
+  try {
+    const result = await deps.schedulerDeps.runAgent({
+      prompt: formatDelegatedPrompt(taskId, input.prompt),
+      agentId: agent.id,
+      chatJid: delegatedChatJid,
+      isMain: agent.isMain ?? false,
+      modelProvider: agent.modelProvider,
+      modelName: agent.modelName,
+      delegationDepth: delegationDepth + 1,
+    });
+
+    if (result.status === 'error') {
+      return {
+        ok: false,
+        taskId,
+        agentId: agent.id,
+        message: `Delegated task ${taskId} failed in agent ${agent.id}.`,
+        error: truncateDelegatedResult(result.error ?? 'Unknown error'),
+      };
+    }
+
+    if (!result.result || isNoReply(result.result)) {
+      return {
+        ok: true,
+        taskId,
+        agentId: agent.id,
+        message: `Delegated task ${taskId} completed in agent ${agent.id}, but it did not return any text result.`,
+        result: '',
+      };
+    }
+
+    return {
+      ok: true,
+      taskId,
+      agentId: agent.id,
+      message: `Delegated task ${taskId} completed in agent ${agent.id}.`,
+      result: truncateDelegatedResult(result.result),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error(
+      {
+        taskId,
+        delegatedAgentId: input.agent_id,
+        parentAgentId: ctx.agentId,
+        parentChatJid: ctx.chatJid,
+        err: error,
+      },
+      'Delegated task execution failed',
+    );
+    return {
+      ok: false,
+      taskId,
+      agentId: input.agent_id,
+      message: `Delegated task ${taskId} failed in agent ${input.agent_id}.`,
+      error: truncateDelegatedResult(message),
+    };
+  }
 }
 
 async function createOrUpdateAgent(
@@ -512,6 +620,17 @@ export function createNanoClawTools(deps: NanoClawDeps, ctx: NanoClawContext) {
         return {
           message: agentList || 'No agents registered.',
         };
+      },
+    }),
+    delegate_to_agent: tool({
+      description:
+        'Delegate a one-off task to another agent running in an isolated context, then return its final result.',
+      inputSchema: z.object({
+        agent_id: z.string().describe('Agent ID to delegate work to'),
+        prompt: z.string().describe('Task for the delegated agent'),
+      }),
+      execute: async (input: { agent_id: string; prompt: string }) => {
+        return await delegateToAgent(deps, ctx, input);
       },
     }),
     instance_info: tool({

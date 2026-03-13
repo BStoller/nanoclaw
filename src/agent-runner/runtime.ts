@@ -100,6 +100,7 @@ export interface AgentInput {
   agentId: string; // Changed from groupFolder
   chatJid: string;
   isMain: boolean;
+  delegationDepth?: number;
   isScheduledTask?: boolean;
   modelProvider?: string;
   modelName?: string;
@@ -628,6 +629,7 @@ async function runQuery(
       chatJid: input.chatJid,
       agentId: input.agentId,
       isMain: input.isMain,
+      delegationDepth: input.delegationDepth,
     },
     nanoclawDeps: {
       sendMessage: deps.sendMessage,
