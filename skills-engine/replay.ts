@@ -117,10 +117,13 @@ export async function replaySkills(
 
   // 3. Load pre-computed resolutions into git's rr-cache before replaying
   // Pass the last skill's dir — it's the one applied on top, producing conflicts
-  const lastSkillDir = options.skills.length > 0
-    ? options.skillDirs[options.skills[options.skills.length - 1]]
-    : undefined;
-  loadResolutions(options.skills, projectRoot, lastSkillDir);
+  const lastSkillDir =
+    options.skills.length > 0
+      ? options.skillDirs[options.skills[options.skills.length - 1]]
+      : undefined;
+  if (lastSkillDir) {
+    loadResolutions(options.skills, projectRoot, lastSkillDir);
+  }
 
   // Replay each skill in order
   // Collect structured ops for batch application
