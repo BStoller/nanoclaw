@@ -47,12 +47,12 @@ export function parseThreadId(threadId: string): {
       break;
 
     case 'slack':
-      // Format: slack:teamId:channelId or slack:channelId
+      // Format: slack:channelId or slack:channelId:threadTs
       if (parts.length >= 2) {
         return {
           platform,
           normalizedId: threadId,
-          channelId: parts[parts.length - 1],
+          channelId: parts[1],
         };
       }
       break;
@@ -140,8 +140,11 @@ export async function resolveAgentId(threadId: string): Promise<string | null> {
   const formatsToTry = [
     threadId, // Full: discord:guildId:channelId
     `${parsed.platform}:${parsed.channelId}`, // Short: discord:channelId
-    `dc:${parsed.channelId}`, // Legacy: dc:channelId
   ];
+
+  if (parsed.platform === 'discord') {
+    formatsToTry.push(`dc:${parsed.channelId}`); // Legacy: dc:channelId
+  }
 
   // Try exact matches first
   for (const format of formatsToTry) {

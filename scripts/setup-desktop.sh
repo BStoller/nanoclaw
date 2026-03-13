@@ -2,6 +2,21 @@
 
 set -euo pipefail
 
+ENABLE_SLACK_SETUP=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --slack)
+      ENABLE_SLACK_SETUP=true
+      shift
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
 # Guard: ensure we run from repository root so relative paths work
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -35,6 +50,8 @@ ${SUDO} apt-get install -y \
   curl \
   dbus-x11 \
   gpg \
+  python3 \
+  python3-venv \
   xrdp \
   x11vnc \
   xserver-xorg-video-dummy \
@@ -173,6 +190,11 @@ if [[ ! -f "${ENV_FILE}" ]]; then
 fi
 
 ${SUDO_U} npm install
+if [[ "${ENABLE_SLACK_SETUP}" == "true" ]]; then
+  ${SUDO} env LOG_LEVEL=debug ./node_modules/.bin/tsx scripts/setup-server/index.ts slack --env-file "${ENV_FILE}"
+  ${SUDO} chown -R "${USER_NAME}:${USER_NAME}" "${REPO_ROOT}/logs"
+  ${SUDO} chown "${USER_NAME}:${USER_NAME}" "${ENV_FILE}"
+fi
 ${SUDO_U} npm run build
 
 ${SUDO} loginctl enable-linger "${USER_NAME}"

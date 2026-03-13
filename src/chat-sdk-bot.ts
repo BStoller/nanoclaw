@@ -207,7 +207,7 @@ function extractPlatformAndChannelId(
       }
       return null;
     case 'slack':
-      return { platform, channelId: parts[parts.length - 1] };
+      return { platform, channelId: parts[1] };
     case 'teams':
       if (parts.length >= 3) {
         return { platform, channelId: parts[2] };
@@ -846,9 +846,14 @@ export async function createChatSdkBot(): Promise<Chat> {
 
   // Configure Slack adapter if token is provided
   if (process.env.SLACK_BOT_TOKEN) {
+    if (!process.env.SLACK_APP_TOKEN) {
+      throw new Error(
+        'SLACK_APP_TOKEN is required for Slack Socket Mode. NanoClaw does not support Slack webhook mode.',
+      );
+    }
+
     adapters.slack = createSlackAdapter({
       botToken: process.env.SLACK_BOT_TOKEN,
-      signingSecret: process.env.SLACK_SIGNING_SECRET,
       appToken: process.env.SLACK_APP_TOKEN,
       logger: new PinoLoggerAdapter(logger),
     });
@@ -1179,13 +1184,9 @@ export async function createChatSdkBot(): Promise<Chat> {
     }
   }
 
-  // Slack initializes via webhooks or Socket Mode inside the adapter
+  // Slack initializes via Socket Mode inside the adapter
   if (process.env.SLACK_BOT_TOKEN) {
-    logger.info(
-      process.env.SLACK_APP_TOKEN
-        ? 'Slack adapter initialized (socket mode)'
-        : 'Slack adapter initialized (webhook mode)',
-    );
+    logger.info('Slack adapter initialized (socket mode)');
   }
 
   // Store the bot instance for use by other modules

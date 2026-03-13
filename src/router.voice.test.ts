@@ -34,4 +34,14 @@ describe('resolveAgentId voice routing', () => {
       'ops',
     );
   });
+
+  it('matches Slack channel routes for threaded Slack messages', async () => {
+    getAllRoutes.mockResolvedValue({
+      'slack:C12345': 'main',
+    });
+
+    await expect(
+      resolveAgentId('slack:C12345:1741880000.000100'),
+    ).resolves.toBe('main');
+  });
 });
